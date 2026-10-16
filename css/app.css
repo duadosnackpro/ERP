@@ -240,3 +240,11 @@ main.col{display:flex;flex-direction:column;padding-bottom:0}main.col #sf{flex:1
 .rl-main{flex:1;min-width:0;display:flex;justify-content:space-between;gap:var(--s2);text-align:left;border:0;background:none;padding:var(--s3) 0 var(--s3) var(--s4);font:inherit;color:inherit}
 .rl .chip{flex:none;margin-right:var(--s3)}
 .btn.dan.sm{min-height:44px}
+
+/* v1.7: logo struk (pratinjau pada lebar kertas, editor logo) */
+.lg-paper{background:#fff;border:1px dashed var(--line);border-radius:12px;padding:12px;margin:8px 0;overflow:hidden}
+.lg-cv{display:block;margin:0 auto;max-width:100%;height:auto;image-rendering:pixelated}
+.lg-rc{margin:0 auto 8px}
+.lg-rng{width:100%;margin:8px 0 12px;accent-color:var(--mar)}
+.lg-note{background:#FFF1CC;color:#5b3a00;border-radius:12px;padding:9px 12px;font-size:13px;font-weight:600;margin:8px 0}
+.set-card .row2{margin-bottom:6px}

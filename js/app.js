@@ -204,20 +204,171 @@ window.addEventListener('unhandledrejection', ev => logErr(ev.reason, 'promise')
 /* struk: satu sumber teks untuk layar, WhatsApp, dan printer; lebar mengikuti pengaturan (32 = 58 mm, 48 = 80 mm) */
 const rcWidth = () => Number(cfg('lebar_struk')) === 48 ? 48 : 32;
 const wrapTxt = (t, w) => { const o = []; t = String(t); while (t.length > w) { o.push(t.slice(0, w)); t = t.slice(w); } o.push(t); return o; };
-function receiptLines(rc, w) {
+function receiptLines(rc, w, noName) {
   w = w || rcWidth(); const line = '-'.repeat(w), L = (a, b) => { a = String(a); b = String(b); return a + ' '.repeat(Math.max(1, w - a.length - b.length)) + b; };
   const o = [String(cfg('nama_usaha') || 'Duado Snack').toUpperCase(), line, 'No : ' + (S.nomor[rc.rid] || '(menunggu sinkron)'), 'Tgl: ' + fmtDT(rc.time), 'Via: ' + rc.ch, line];
   rc.lines.forEach(l => { wrapTxt(l.n, w).forEach(x => o.push(x)); o.push(L(' ' + l.q + ' x ' + num(l.h), num(l.q * l.h))); });
   o.push(line, L('Subtotal', num(rc.sub))); if (rc.dis) o.push(L('Diskon', '-' + num(rc.dis))); if (rc.ppn) o.push(L(T(cfg('ppn_inklusif')) ? 'PPN (incl.)' : 'PPN', num(rc.ppn)));
   o.push(L('TOTAL', num(rc.total)), L('Bayar (' + rc.metode + ')', num(rc.terima))); if (rc.metode === 'tunai') o.push(L('Kembali', num(rc.kembali)));
-  o.push(line); wrapTxt(cfg('footer_struk') || 'Terima kasih', w).forEach(x => o.push(x)); return o;
+  o.push(line); wrapTxt(cfg('footer_struk') || 'Terima kasih', w).forEach(x => o.push(x)); if (noName) o.shift(); return o;
 }
 const receiptText = rc => receiptLines(rc).join('\n');
 const ascii = t => String(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[·•–—]/g, '-').replace(/[^\x20-\x7E]/g, '?');
-function escpos(rc) { // byte ESC/POS untuk printer thermal (dikirim lewat RawBT)
-  const lines = receiptLines(rc), out = [0x1B, 0x40], add = a => { for (const c of ascii(a)) out.push(c.charCodeAt(0)); out.push(10); }, w = rcWidth();
-  out.push(0x1B, 0x61, 1, 0x1B, 0x45, 1); if (lines[0].length * 2 <= w) out.push(0x1D, 0x21, 0x11); add(lines[0]); out.push(0x1D, 0x21, 0, 0x1B, 0x45, 0, 0x1B, 0x61, 0);
-  lines.slice(1).forEach(add); out.push(0x1B, 0x64, 4); return new Uint8Array(out);
+function escpos(rc) { // byte ESC/POS untuk printer thermal (dikirim lewat RawBT atau BLE langsung)
+  const lg = logoOn(), noName = !!lg && !cfgOn('logo_nama', true), lines = receiptLines(rc, 0, noName), out = [0x1B, 0x40], add = a => { for (const c of ascii(a)) out.push(c.charCodeAt(0)); out.push(10); }, w = rcWidth();
+  if (lg) { out.push(0x1B, 0x61, 1); const r = logoRaster(logoFit(lg, paperDots())); for (let i = 0; i < r.length; i++) out.push(r[i]); out.push(10, 0x1B, 0x61, 0); } // logo di tengah, atas struk
+  if (noName) lines.forEach(add);
+  else { out.push(0x1B, 0x61, 1, 0x1B, 0x45, 1); if (lines[0].length * 2 <= w) out.push(0x1D, 0x21, 0x11); add(lines[0]); out.push(0x1D, 0x21, 0, 0x1B, 0x45, 0, 0x1B, 0x61, 0); lines.slice(1).forEach(add); }
+  out.push(0x1B, 0x64, 4); return new Uint8Array(out);
+}
+/* ---------- Logo struk: bitmap 1-bit untuk printer thermal ----------
+   Disimpan di pengaturan `logo_data` sebagai "L1;<lebar>x<tinggi>;<t|h>;<base64>" (1 = titik hitam, MSB dahulu, per baris).
+   t = hitam-putih tegas (ambang), h = halftone (Floyd-Steinberg). Dicetak dengan perintah raster ESC/POS `GS v 0`.
+   Ukuran logo sudah final saat disimpan (persen dari lebar kertas); bila kertas diganti jadi lebih sempit, logo dikecilkan saat cetak. */
+const LOGO_MAX_H = 256, LOGO_BAND = 64, LOGO_RE = /^L1;(\d{1,3})x(\d{1,3});([th]);([A-Za-z0-9+\/]+={0,2})$/;
+const paperDots = () => rcWidth() === 48 ? 576 : 384; // 203 dpi = 8 titik per mm (58 mm: 384 titik, 80 mm: 576 titik)
+const cfgOn = (k, def) => { const v = cfg(k); return v == null || v === '' ? !!def : T(v); };
+function logoPack(mono, w, h) { // mono: Uint8Array w*h (1 = hitam) -> byte per baris, bit tertinggi = titik paling kiri
+  const bpr = w >> 3, out = new Uint8Array(bpr * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (mono[y * w + x]) out[y * bpr + (x >> 3)] |= 0x80 >> (x & 7);
+  return out;
+}
+const logoEncode = lg => 'L1;' + lg.w + 'x' + lg.h + ';' + lg.mode + ';' + b64(lg.bytes);
+function logoDecode(str) {
+  const m = LOGO_RE.exec(String(str || '')); if (!m) return null;
+  const w = +m[1], h = +m[2]; if (w < 8 || w % 8 || w > 576 || h < 1 || h > LOGO_MAX_H) return null;
+  let bin; try { bin = atob(m[4]); } catch (e) { return null; }
+  if (bin.length !== (w >> 3) * h) return null;
+  const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return {w: w, h: h, mode: m[3], bytes: bytes};
+}
+const LGC = {s: null, v: null, url: null}; // logo tersimpan (didekode sekali per perubahan data)
+function logoGet() { const s = String(cfg('logo_data') || ''); if (s !== LGC.s) { LGC.s = s; LGC.v = logoDecode(s); LGC.url = null; } return LGC.v; }
+const logoOn = () => cfgOn('logo_aktif', false) ? logoGet() : null;
+const toGray = (rgba, n) => { const g = new Uint8Array(n); for (let i = 0; i < n; i++) g[i] = (rgba[4 * i] * 77 + rgba[4 * i + 1] * 150 + rgba[4 * i + 2] * 29) >> 8; return g; };
+function otsu(g) { // ambang otomatis yang memisahkan latar dan gambar; titik dengan nilai < hasil dicetak hitam
+  const hst = new Array(256).fill(0), n = g.length; for (let i = 0; i < n; i++) hst[g[i]]++;
+  let sum = 0, sb = 0, wb = 0, best = -1, thr = 128; for (let i = 0; i < 256; i++) sum += i * hst[i];
+  for (let t = 0; t < 256; t++) { wb += hst[t]; if (!wb) continue; const wf = n - wb; if (!wf) break; sb += t * hst[t]; const mb = sb / wb, mf = (sum - sb) / wf, v = wb * wf * (mb - mf) * (mb - mf); if (v > best) { best = v; thr = t + 1; } }
+  return thr;
+}
+const monoThreshold = (g, thr) => { const m = new Uint8Array(g.length); for (let i = 0; i < g.length; i++) m[i] = g[i] < thr ? 1 : 0; return m; };
+function monoDither(g, w, h, bias) { // Floyd-Steinberg; bias > 0 = lebih terang. Lewat kurva gamma: putih murni tetap putih, hitam murni tetap hitam (tanpa titik liar di latar)
+  const lut = new Float32Array(256), gm = Math.pow(2, -bias / 64); for (let i = 0; i < 256; i++) lut[i] = 255 * Math.pow(i / 255, gm);
+  const f = new Float32Array(w * h), m = new Uint8Array(w * h); for (let i = 0; i < f.length; i++) f[i] = lut[g[i]];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x, o = f[i], nv = o < 128 ? 0 : 255, er = o - nv; m[i] = nv === 0 ? 1 : 0;
+    if (x + 1 < w) f[i + 1] += er * 7 / 16;
+    if (y + 1 < h) { if (x > 0) f[i + w - 1] += er * 3 / 16; f[i + w] += er * 5 / 16; if (x + 1 < w) f[i + w + 1] += er / 16; }
+  }
+  return m;
+}
+function isColorImg(rgba, n) { // berwarna bila >4% titik bukan-putih punya selisih kanal RGB yang jelas
+  let ink = 0, col = 0;
+  for (let i = 0; i < n; i++) { const r = rgba[4 * i], g = rgba[4 * i + 1], b = rgba[4 * i + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b); if (mn > 235) continue; ink++; if (mx - mn > 48) col++; }
+  return ink > 0 && col / ink > 0.04;
+}
+function logoFit(lg, maxW) { // kecilkan logo bila lebih lebar dari kertas (rata-rata area lalu dibuat 1-bit lagi)
+  if (lg.w <= maxW) return lg;
+  const w = maxW & ~7, h = Math.max(1, Math.round(lg.h * w / lg.w)), g = new Uint8Array(w * h), sx = lg.w / w, sy = lg.h / h, bpr = lg.w >> 3;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const x0 = Math.floor(x * sx), x1 = Math.min(lg.w, Math.max(x0 + 1, Math.ceil((x + 1) * sx))), y0 = Math.floor(y * sy), y1 = Math.min(lg.h, Math.max(y0 + 1, Math.ceil((y + 1) * sy)));
+    let on = 0; for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) if (lg.bytes[yy * bpr + (xx >> 3)] & (0x80 >> (xx & 7))) on++;
+    g[y * w + x] = Math.round(255 * (1 - on / ((x1 - x0) * (y1 - y0))));
+  }
+  return {w: w, h: h, mode: lg.mode, bytes: logoPack(lg.mode === 'h' ? monoDither(g, w, h, 0) : monoThreshold(g, 128), w, h)};
+}
+function logoRaster(lg) { // GS v 0 per pita LOGO_BAND baris: printer murah dengan buffer kecil tidak kebanjiran
+  const bpr = lg.w >> 3, out = [];
+  for (let y = 0; y < lg.h; y += LOGO_BAND) {
+    const n = Math.min(LOGO_BAND, lg.h - y); out.push(0x1D, 0x76, 0x30, 0, bpr & 255, bpr >> 8, n & 255, n >> 8);
+    for (let i = y * bpr; i < (y + n) * bpr; i++) out.push(lg.bytes[i]);
+  }
+  return out;
+}
+function logoPaint(cv, lg) { // gambar bitmap 1-bit ke kanvas (pratinjau, struk di layar)
+  cv.width = lg.w; cv.height = lg.h; const cx = cv.getContext('2d'), im = cx.createImageData(lg.w, lg.h), bpr = lg.w >> 3;
+  for (let y = 0; y < lg.h; y++) for (let x = 0; x < lg.w; x++) { const i = (y * lg.w + x) * 4, v = lg.bytes[y * bpr + (x >> 3)] & (0x80 >> (x & 7)) ? 0 : 255; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255; }
+  cx.putImageData(im, 0, 0);
+}
+function logoURL(lg) {
+  if (!lg) return ''; if (lg === LGC.v && LGC.url != null) return LGC.url;
+  let u = ''; try { const cv = document.createElement('canvas'); logoPaint(cv, lg); u = cv.toDataURL('image/png'); } catch (e) { logErr(e, 'logo'); }
+  if (lg === LGC.v) LGC.url = u; return u;
+}
+const logoPct = lg => Math.min(100, lg.w / paperDots() * 100).toFixed(1) + '%';
+
+/* editor: pilih gambar -> pratinjau langsung -> simpan */
+let LGE = null;
+const loadImg = f => new Promise((ok, no) => { const u = URL.createObjectURL(f), im = new Image(); im.onload = () => { URL.revokeObjectURL(u); ok(im); }; im.onerror = () => { URL.revokeObjectURL(u); no(new Error('gambar')); }; im.src = u; });
+function logoDraw(src, sw, sh, w, h) { // skala bertahap (maks. 2x per langkah) agar gambar besar tetap halus; latar transparan menjadi putih
+  const mk = (a, b) => { const c = document.createElement('canvas'); c.width = a; c.height = b; const x = c.getContext('2d', {willReadFrequently: true}); x.fillStyle = '#fff'; x.fillRect(0, 0, a, b); x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high'; return [c, x]; };
+  let cur = src, cw = sw, ch = sh;
+  while (cw > w * 2 || ch > h * 2) { const nw = Math.max(w, Math.ceil(cw / 2)), nh = Math.max(h, Math.ceil(ch / 2)), p = mk(nw, nh); p[1].drawImage(cur, 0, 0, nw, nh); cur = p[0]; cw = nw; ch = nh; }
+  const p = mk(w, h); p[1].drawImage(cur, 0, 0, w, h); return p[0];
+}
+function logoSize(e) { // lebar final (kelipatan 8) dari persen lebar kertas; tinggi dibatasi LOGO_MAX_H
+  let w = Math.max(8, Math.round(paperDots() * e.pct / 100 / 8) * 8), h = Math.max(1, Math.round(w * e.sh / e.sw));
+  if (h > LOGO_MAX_H) { w = Math.max(8, Math.floor(LOGO_MAX_H * e.sw / e.sh / 8) * 8); h = Math.min(LOGO_MAX_H, Math.max(1, Math.round(w * e.sh / e.sw))); }
+  return {w: w, h: h};
+}
+function logoCompute(e, rgba, w, h) { // rgba: piksel gambar pada ukuran final -> bitmap 1-bit sesuai pilihan
+  let g = toGray(rgba, w * h); if (e.inv) g = g.map(v => 255 - v);
+  const bw = !e.color || e.bw; // gambar tidak berwarna selalu hitam-putih tegas
+  return {w: w, h: h, mode: bw ? 't' : 'h', bytes: logoPack(bw ? monoThreshold(g, e.thr) : monoDither(g, w, h, 128 - e.thr + 20), w, h)}; // +20: titik thermal melebar, halftone dibuat sedikit lebih terang
+}
+function logoRender() {
+  const e = LGE, pv = $('#lg_cv'); if (!e || !pv) return;
+  const d = logoSize(e), cv = logoDraw(e.src, e.sw, e.sh, d.w, d.h);
+  e.out = logoCompute(e, cv.getContext('2d').getImageData(0, 0, d.w, d.h).data, d.w, d.h);
+  logoPaint(pv, e.out); pv.style.width = logoPct(e.out);
+  const inf = $('#lg_info'); if (inf) inf.textContent = d.w + ' × ' + d.h + ' titik · lebar ± ' + (d.w / 8) + ' mm · ' + (e.out.bytes.length / 1024).toFixed(1) + ' KB';
+}
+function logoEdit(el) {
+  const e = LGE; if (!e) return; const k = el.dataset.lg;
+  e[k] = el.type === 'checkbox' ? el.checked : (k === 'thr' || k === 'pct') ? Number(el.value) : el.value;
+  cancelAnimationFrame(e.raf); e.raf = requestAnimationFrame(logoRender);
+}
+async function logoLoad(file) {
+  if (!file) return;
+  if (!/^image\//.test(file.type || '')) return toast('Pilih file gambar (PNG, JPG, atau WebP)');
+  if (file.size > 10 * 1024 * 1024) return toast('Gambar terlalu besar (maks. 10 MB)');
+  let src; try { src = typeof createImageBitmap === 'function' ? await createImageBitmap(file) : await loadImg(file); } catch (e1) { try { src = await loadImg(file); } catch (e2) { return toast('Gambar tidak bisa dibaca. Gunakan PNG atau JPG.'); } }
+  const sw = src.width || src.naturalWidth, sh = src.height || src.naturalHeight; if (!sw || !sh) return toast('Gambar tidak bisa dibaca. Gunakan PNG atau JPG.');
+  const k = Math.min(1, 1152 / Math.max(sw, sh)), rw = Math.max(1, Math.round(sw * k)), rh = Math.max(1, Math.round(sh * k));
+  const base = logoDraw(src, sw, sh, rw, rh); if (src.close) { try { src.close(); } catch (e3) {} }
+  const sk = Math.min(1, 96 / Math.max(rw, rh)), sc = logoDraw(base, rw, rh, Math.max(1, Math.round(rw * sk)), Math.max(1, Math.round(rh * sk))), sd = sc.getContext('2d').getImageData(0, 0, sc.width, sc.height).data;
+  const color = isColorImg(sd, sc.width * sc.height), thr = Math.min(215, Math.max(40, otsu(toGray(sd, sc.width * sc.height))));
+  LGE = {src: base, sw: rw, sh: rh, color: color, bw: true, inv: false, thr: thr, pct: 60, out: null, raf: 0};
+  logoSheet();
+}
+function logoSheet() {
+  const e = LGE, pcts = [30, 40, 50, 60, 70, 80, 90, 100], kertas = rcWidth() === 48 ? '80' : '58';
+  sheet('<div class="grab"></div><h2>Logo struk</h2><p class="muted">Pratinjau memakai lebar kertas ' + kertas + ' mm. Printer thermal hanya mencetak titik hitam atau putih.</p>' +
+    '<div class="lg-paper"><canvas id="lg_cv" class="lg-cv" aria-label="Pratinjau logo"></canvas></div><p class="muted c" id="lg_info"></p>' +
+    (e.color ? '<div class="lg-note">Logo berwarna terdeteksi. Warna tidak bisa dicetak, jadi gambar perlu diubah ke hitam-putih.</div>' +
+      '<label class="sw"><input type="checkbox" data-lg="bw" checked><span class="sw-t" aria-hidden="true"></span><span class="sw-l"><b>Ubah ke hitam-putih (B&amp;W)</b><small>Aktif: garis dan teks tegas, cocok untuk logo. Nonaktif: halftone (titik-titik) agar gradasi tetap terlihat.</small></span></label>' : '') +
+    '<label>Ketebalan hitam<input type="range" class="lg-rng" data-lg="thr" min="20" max="235" value="' + e.thr + '"></label><p class="muted" style="margin:-6px 0 8px">Bagian terang (mis. kuning) ikut hilang? Geser ke kanan. Terlalu pekat? Geser ke kiri.</p>' +
+    '<label class="sw"><input type="checkbox" data-lg="inv"><span class="sw-t" aria-hidden="true"></span><span class="sw-l"><b>Balik hitam dan putih</b><small>Aktifkan bila logo berwarna putih atau latarnya transparan.</small></span></label>' +
+    '<label>Ukuran logo (% lebar kertas)<select class="inp" data-lg="pct">' + pcts.map(p => '<option value="' + p + '"' + (p === e.pct ? ' selected' : '') + '>' + p + '%</option>').join('') + '</select></label>' +
+    '<div class="row2"><button class="btn sec" data-act="close">Batal</button><button class="btn pri" data-act="logosave">Simpan logo</button></div>');
+  logoRender();
+}
+function logoSave() {
+  const e = LGE; if (!e || !e.out) return; const first = !logoGet();
+  return busy('Menyimpan logo…', async () => { try { await api('setting.logo', {data: logoEncode(e.out), aktif: first}); await loadData(); closeSheet(); render(); toast('Logo disimpan'); } catch (er) { toast(er.message); } });
+}
+function logoDel() {
+  if (S.dirty) return toast('Simpan perubahan pengaturan dulu.');
+  if (!confirm('Hapus logo struk?')) return;
+  return busy('Menghapus logo…', async () => { try { await api('setting.logo', {data: ''}); await loadData(); render(); toast('Logo dihapus'); } catch (er) { toast(er.message); } });
+}
+function logoCard() { // isi kartu "Logo struk" di Pengaturan (di luar tombol-tombol sakelar)
+  const lg = logoGet(), url = lg ? logoURL(lg) : '';
+  return '<input type="file" id="logo_file" accept="image/*" hidden>' + (lg ?
+    '<div class="lg-paper">' + (url ? '<img class="lg-cv" alt="Logo struk" src="' + url + '" style="width:' + logoPct(lg) + '">' : '') + '</div><p class="muted c">' + lg.w + ' × ' + lg.h + ' titik · lebar ± ' + (lg.w / 8) + ' mm · ' + (lg.mode === 'h' ? 'halftone' : 'hitam-putih') + '</p>' :
+    '<p class="muted">Belum ada logo. Pilih gambar (PNG, JPG, atau WebP); aplikasi mengubahnya menjadi hitam-putih untuk printer thermal.</p>') +
+    '<div class="row2"><button class="btn sec sm" data-act="logopick">' + (lg ? 'Ganti logo' : 'Pilih gambar logo') + '</button>' + (lg ? '<button class="btn dan sm" data-act="logodel">Hapus logo</button>' : '') + '</div>';
 }
 const b64 = u8 => { let t = ''; for (let i = 0; i < u8.length; i += 0x8000) t += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(t); };
 function go(url, blank) { const a = document.createElement('a'); a.href = url; if (blank) { a.target = '_blank'; a.rel = 'noopener'; } a.style.display = 'none'; document.body.appendChild(a); a.click(); setTimeout(() => a.remove(), 800); }
@@ -512,7 +663,10 @@ function showReceipt(rc) {
     '<details class="more"><summary>Lihat struk</summary><pre class="rc" id="rtxt"></pre></details><button class="btn pri big" data-act="close">Transaksi baru</button>');
   refreshRc();
 }
-function refreshRc() { const el = $('#rtxt'); if (el && S.rc) el.textContent = receiptText(S.rc); }
+function refreshRc() { // pratinjau + cetak browser: logo (bila aktif) di atas teks struk
+  const el = $('#rtxt'); if (!el || !S.rc) return; const lg = logoOn(), u = lg ? logoURL(lg) : '';
+  el.innerHTML = (u ? '<img class="lg-cv lg-rc" alt="Logo" src="' + u + '" style="width:' + logoPct(lg) + '">' : '') + esc(receiptLines(S.rc, 0, !!lg && !cfgOn('logo_nama', true)).join('\n'));
+}
 
 /* ---------- Riwayat ---------- */
 async function vRiwayat() {
@@ -730,10 +884,12 @@ function resetResult(r) {
 }
 function vSettings() {
   const s = S.data.settings, g = (k, d) => (s[k] == null || s[k] === '' ? d : s[k]), card = (t, h) => '<section class="set-card"><h3>' + t + '</h3>' + h + '</section>';
-  const sw = (k, l, sub) => '<label class="sw"><input type="checkbox" data-f="' + k + '"' + (T(s[k]) ? ' checked' : '') + '><span class="sw-t" aria-hidden="true"></span><span class="sw-l"><b>' + l + '</b>' + (sub ? '<small>' + sub + '</small>' : '') + '</span></label>';
+  const sw = (k, l, sub, def) => '<label class="sw"><input type="checkbox" data-f="' + k + '"' + (T(s[k] == null || s[k] === '' ? def : s[k]) ? ' checked' : '') + '><span class="sw-t" aria-hidden="true"></span><span class="sw-l"><b>' + l + '</b>' + (sub ? '<small>' + sub + '</small>' : '') + '</span></label>';
   const m = $('#main'); m.className = 'col';
   m.innerHTML = '<button class="chip" data-act="tab" data-t="menu" style="align-self:flex-start">← Menu</button><div id="sf" style="margin-top:8px">' +
     card('Usaha & Struk', field(['nama_usaha', 'Nama usaha'], s.nama_usaha) + field(['footer_struk', 'Teks bawah struk'], s.footer_struk) + selF('lebar_struk', 'Lebar kertas struk', [['32', '58 mm (32 karakter)'], ['48', '80 mm (48 karakter)']], g('lebar_struk', '32'))) +
+    card('Logo struk', logoCard() + sw('logo_aktif', 'Cetak logo di struk', 'Untuk printer thermal. Struk WhatsApp tetap berupa teks.') + sw('logo_nama', 'Cetak nama usaha di bawah logo', 'Matikan bila logo sudah memuat nama usaha.', true) +
+      (logoGet() ? '<button class="btn sec sm" data-act="logotest">Uji cetak logo</button>' : '') + '<p class="muted">Ukuran kertas diganti (58 atau 80 mm)? Pilih ulang logo agar ukurannya pas.</p>') +
     card('Pajak (PPN)', sw('ppn_aktif', 'Aktifkan PPN', 'Hitung PPN pada setiap transaksi') + '<div id="ppn-x">' + field(['ppn_persen', 'Tarif PPN (%)', 'number'], s.ppn_persen) + sw('ppn_inklusif', 'Harga jual sudah termasuk PPN') + '</div>') +
     card('Stok', sw('blokir_stok_minus', 'Blokir penjualan jika stok kurang', 'Kasir tidak bisa menjual produk yang stoknya habis') + field(['stok_menipis', 'Batas "Menipis" produk jadi (jumlah)', 'number'], g('stok_menipis', '5'))) +
     card('Kantong & Tambahan', '<p class="muted">Produk berkategori "Tambahan" (mis. kantong kresek) muncul di menu pembayaran kasir sebagai pilihan tambahan, bukan di daftar produk.</p>' +
@@ -800,6 +956,8 @@ const ACT = {
   resetgo: () => { const q = k => { const e = document.querySelector('#sheet [data-rs=' + k + ']'); return !!(e && e.checked); };
     return busy('Membuat cadangan dan mereset data…', async () => { try { const r = await api('data.reset', {konfirmasi: 'RESET', pembelian: q('pembelian'), produksi: q('produksi'), biaya: q('biaya'), nol_stok: q('nol')});
       ['hari', 'minggu', 'bulan'].forEach(p => LS.del('dash_' + p)); S.exp = null; S.expLoaded = false; S.day = null; await loadData(); closeSheet(); render(); resetResult(r); } catch (e) { toast(e.message); } }); },
+  logopick: () => { if (S.dirty) return toast('Simpan perubahan pengaturan dulu.'); const f = $('#logo_file'); if (f) f.click(); }, logosave: logoSave, logodel: logoDel,
+  logotest: () => { if (!logoOn()) return toast('Aktifkan "Cetak logo di struk" dan simpan pengaturan dulu'); printBT(testRc()); },
   go_diag: () => { S.tab = 'diag'; render(); }, go_arsip: () => { S.tab = 'arsip'; render(); },
   opin_ok: opinOk,
   qauth: async el => { const q = S.queue[el.dataset.i]; if (!q) return; const kind = /^Diskon/.test(q.error || '') ? 'diskon' : 'selisih';
@@ -833,7 +991,8 @@ document.addEventListener('click', e => {
   ACT[a](el);
 });
 document.addEventListener('input', e => { if (S.tab === 'settings' && e.target.closest && e.target.closest('#sf')) sDirty(); const d = e.target.dataset; if (d && d.rs === 'c') { const b = $('#rsbtn'); if (b) b.disabled = !(e.target.value.trim() === 'RESET' && !S.queue.length); } });
-document.addEventListener('change', e => { if (S.tab === 'settings' && e.target.closest && e.target.closest('#sf')) sDirty(); });
+document.addEventListener('change', e => { if (e.target.id === 'logo_file') { const f = e.target.files && e.target.files[0]; e.target.value = ''; logoLoad(f); return; } if (S.tab === 'settings' && e.target.closest && e.target.closest('#sf')) sDirty(); });
+document.addEventListener('input', e => { if (e.target.dataset && e.target.dataset.lg) logoEdit(e.target); });
 window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.installEv = e; if (S.tab === 'menu' && S.data) vMenu(); });
 window.addEventListener('appinstalled', () => { S.installEv = null; if (S.tab === 'menu' && S.data) vMenu(); });

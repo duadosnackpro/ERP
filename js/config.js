@@ -1,5 +1,5 @@
 // Isi dengan URL Web App Apps Script (berakhiran /exec) setelah deploy.
 window.CONFIG = {
-  API_URL: 'https://script.google.com/macros/s/AKfycbzSnt8RDQBU_WWSxmZVUrNqjDg8otmPMps1bIgDT1pi-gfZkoQzfc-k8x04jSUu4oagLQ/exec',
-  VERSION: '1.6.0'
+  API_URL: 'PASTE_URL_WEB_APP_DI_SINI',
+  VERSION: '1.7.0'
 };
