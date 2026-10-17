@@ -133,7 +133,7 @@ async function flush() {
         if (!e.server) netFail = true; LS.set('queue', S.queue); continue;
       }
       batch.forEach((q, i) => { const r = res[i];
-        if (r && r.ok) { const d = r.data || {}; if (d.sale) S.nomor[q.rid] = d.sale.nomor; if (d.peringatan) toast(d.peringatan); S.queue = S.queue.filter(x => x !== q); Object.keys(d.stok || {}).forEach(id => { const v = vById(id); if (v) v.stok = r6(d.stok[id] - pendingQty(id)); }); }
+        if (r && r.ok) { const d = r.data || {}; if (d.sale) S.nomor[q.rid] = d.sale.nomor; if (d.peringatan) toast(d.peringatan); if (d.stok_minus && d.stok_minus.length) toast('Stok minus: ' + d.stok_minus.map(m => m.sku).join(', ') + '. Tercatat, perlu opname.'); S.queue = S.queue.filter(x => x !== q); Object.keys(d.stok || {}).forEach(id => { const v = vById(id); if (v) v.stok = r6(d.stok[id] - pendingQty(id)); }); }
         else { q.status = 'review'; q.state = 'error'; q.error = (r && r.error) || 'Ditolak server'; } });
       LS.set('queue', S.queue); refreshRc(); flushDelay = 15000;
     }
@@ -682,7 +682,7 @@ async function vRiwayat() {
     const done = rows.filter(r => r.status === 'selesai'), omzet = done.reduce((a, r) => a + Number(r.total), 0), avg = done.length ? omzet / done.length : 0;
     $('#rsum').innerHTML = '<div class="kgrid"><div class="kpi"><div class="muted">Omzet</div><b>' + rp(omzet) + '</b></div><div class="kpi"><div class="muted">Transaksi</div><b>' + done.length + '</b></div><div class="kpi wide"><div class="muted">Rata-rata per transaksi</div><b>' + rp(avg) + '</b></div>' + (own() ? '<div class="kpi wide"><div class="muted">Produk terlaris</div><b id="rtop">' + (done.length ? 'Memuat…' : '-') + '</b></div>' : '') + '</div>';
     if (own() && done.length) api('report.get', {type: 'penjualan', from: day, to: day}, {silent: true}).then(r => { const el = $('#rtop'); if (!el) return; const best = r.rows.slice().sort((a, b) => b[2] - a[2])[0]; el.innerHTML = best ? esc((best[0] + ' ' + best[1]).trim()) + ' <small class="muted">' + qf(best[2]) + ' terjual</small>' : '-'; }).catch(() => { const el = $('#rtop'); if (el) el.textContent = '-'; });
-    $('#rlist').innerHTML = rows.map(r => '<div class="li"><div><b>' + esc(r.nomor) + '</b><div class="muted">' + esc(String(r.tanggal).slice(11, 16)) + ' · ' + esc(chName(r.channel_id)) + ' · ' + esc(r.metode_bayar) + '</div></div><b>' + rp(r.total) + '</b></div>').join('') ||
+    $('#rlist').innerHTML = rows.map(r => '<div class="li"><div><b>' + esc(r.nomor) + '</b>' + (r.status === 'batal' ? ' <span class="tag red">Dibatalkan</span>' : r.status === 'proses' ? ' <span class="tag">Diproses</span>' : '') + '<div class="muted">' + esc(String(r.tanggal).slice(11, 16)) + ' · ' + esc(chName(r.channel_id)) + ' · ' + esc(r.metode_bayar) + '</div></div><div class="r"><b' + (r.status === 'batal' ? ' style="text-decoration:line-through;opacity:.6"' : '') + '>' + rp(r.total) + '</b>' + (r.status === 'selesai' ? '<div><button class="chip" data-act="svoid" data-id="' + esc(r.id) + '" data-n="' + esc(r.nomor) + '">Batalkan</button></div>' : '') + '</div></div>').join('') ||
       emptyState('riwayat', 'Belum ada transaksi', 'Tidak ada transaksi pada ' + esc(idDate(day)) + '.', '<button class="btn pri" data-act="tab" data-t="kasir">Mulai transaksi</button>');
   } catch (e) { if ($('#rlist')) $('#rlist').innerHTML = '<p class="muted">Tidak bisa memuat riwayat dari server (' + esc(e.message) + ').</p>'; }
 }
@@ -891,7 +891,7 @@ function vSettings() {
     card('Logo struk', logoCard() + sw('logo_aktif', 'Cetak logo di struk', 'Untuk printer thermal. Struk WhatsApp tetap berupa teks.') + sw('logo_nama', 'Cetak nama usaha di bawah logo', 'Matikan bila logo sudah memuat nama usaha.', true) +
       (logoGet() ? '<button class="btn sec sm" data-act="logotest">Uji cetak logo</button>' : '') + '<p class="muted">Ukuran kertas diganti (58 atau 80 mm)? Pilih ulang logo agar ukurannya pas.</p>') +
     card('Pajak (PPN)', sw('ppn_aktif', 'Aktifkan PPN', 'Hitung PPN pada setiap transaksi') + '<div id="ppn-x">' + field(['ppn_persen', 'Tarif PPN (%)', 'number'], s.ppn_persen) + sw('ppn_inklusif', 'Harga jual sudah termasuk PPN') + '</div>') +
-    card('Stok', sw('blokir_stok_minus', 'Blokir penjualan jika stok kurang', 'Kasir tidak bisa menjual produk yang stoknya habis') + field(['stok_menipis', 'Batas "Menipis" produk jadi (jumlah)', 'number'], g('stok_menipis', '5'))) +
+    card('Stok', sw('blokir_stok_minus', 'Blokir penjualan jika stok kurang', 'Kasir tidak bisa menjual produk yang stoknya habis') + sw('tolak_stok_minus_server', 'Server juga menolak transaksi bila stok kurang', 'Mati (disarankan): transaksi yang sudah terjadi tetap dicatat, stok ditandai minus untuk dibereskan lewat opname', 'FALSE') + field(['stok_menipis', 'Batas "Menipis" produk jadi (jumlah)', 'number'], g('stok_menipis', '5'))) +
     card('Kantong & Tambahan', '<p class="muted">Produk berkategori "Tambahan" (mis. kantong kresek) muncul di menu pembayaran kasir sebagai pilihan tambahan, bukan di daftar produk.</p>' +
       (S.data.variants.filter(isAddon).map(v => '<div class="kv"><span>' + esc(vName(v)) + '</span><span>' + rp(priceOf(v.id, S.ch) || 0) + ' · stok ' + num(v.stok) + '</span></div>').join('') || '<p class="muted">Belum ada produk tambahan.</p>') +
       '<button class="btn sec sm" data-act="addonnew">+ Buat produk tambahan (kresek)</button>') +
@@ -914,13 +914,13 @@ async function sSave() {
 /* ---------- Tutup kasir ---------- */
 async function vTutup() {
   const back = '<button class="chip" data-act="tab" data-t="menu">← Menu</button>';
-  $('#main').innerHTML = back + '<div class="li" style="display:block;margin-top:8px"><b>Tutup kasir</b><p class="muted">Rekap penjualan Anda sejak penutupan terakhir. Hitung uang tunai di laci, isi jumlahnya, lalu tutup.</p></div><div id="tbody">' + skel(3) + '</div>';
+  $('#main').innerHTML = back + '<div class="li" style="display:block;margin-top:8px"><b>Tutup kasir</b><p class="muted">Hitung seluruh uang tunai di laci (termasuk modal awal), isi jumlahnya, lalu tutup. Jumlah yang seharusnya ada ditampilkan setelah Anda menutup kasir.</p></div><div id="tbody">' + skel(3) + '</div>';
   const unsent = mineAll().length;
   if (unsent) { flush(); $('#tbody').innerHTML = '<div class="notice"><span>Masih ada ' + unsent + ' transaksi yang belum terkirim ke server. Kirim dulu agar rekap lengkap.</span><button class="chip" data-act="tab" data-t="tutup">Periksa lagi</button></div><button class="btn pri" data-act="qnow">Kirim sekarang</button>'; return; }
   try {
     const r = await api('shift.summary', {}); if (S.tab !== 'tutup' || !$('#tbody')) return; S.shift = r; const kv = (a, b) => '<div class="kv"><span>' + a + '</span><span>' + b + '</span></div>';
-    $('#tbody').innerHTML = '<div class="li" style="display:block">' + kv('Sejak', esc(String(r.dari).slice(0, 16))) + kv('Jumlah transaksi', num(r.jumlah_trx)) + kv('Tunai', rp(r.tunai)) + kv('Transfer', rp(r.transfer)) + kv('QRIS', rp(r.qris)) + (r.lain ? kv('Lainnya', rp(r.lain)) : '') + kv('<b>Total</b>', '<b>' + rp(r.total) + '</b>') + '</div>' +
-      '<label>Uang tunai di laci (Rp)<input class="inp" id="tf" inputmode="numeric" placeholder="' + num(r.tunai) + '"></label><label>Catatan (opsional)<input class="inp" id="tn"></label><button class="btn pri big" data-act="tclose">Tutup kasir</button><div id="tlist"></div>';
+    $('#tbody').innerHTML = '<div class="li" style="display:block">' + kv('Sejak', esc(String(r.dari).slice(0, 16))) + kv('Jumlah transaksi', num(r.jumlah_trx)) + kv('Transfer', rp(r.transfer)) + kv('QRIS', rp(r.qris)) + (r.lain ? kv('Lainnya', rp(r.lain)) : '') + (r.retur_tunai ? kv('Tunai dikembalikan (retur)', rp(r.retur_tunai)) : '') + '</div>' +
+      '<label>Modal awal laci (Rp, isi 0 bila tidak ada)<input class="inp" id="tm" inputmode="numeric" placeholder="0"></label><label>Uang tunai di laci sekarang (Rp)<input class="inp" id="tf" inputmode="numeric" placeholder="Hasil hitung uang"></label><label>Catatan (opsional)<input class="inp" id="tn"></label><button class="btn pri big" data-act="tclose">Tutup kasir</button><div id="tlist"></div>';
     tutupList();
   } catch (e) { if (e.auth) softLogout(); else if ($('#tbody')) $('#tbody').innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }
 }
@@ -928,8 +928,8 @@ async function tutupList() { try { const L = await api('shift.list', {}); if (!$
 async function tutupSimpan() {
   const v = dnum(($('#tf') || {}).value); if (isNaN(v) || v < 0 || ($('#tf') || {}).value === '') return toast('Isi jumlah uang tunai di laci');
   if (mineAll().length) return toast('Masih ada transaksi belum terkirim');
-  return busy('Menutup kasir…', async () => { try { const r = await api('shift.close', {uang_fisik: v, catatan: ($('#tn') || {}).value || ''}); const d = r.selisih_tunai;
-    $('#tbody').innerHTML = '<div class="okmark">' + svg('check', 30) + '</div><h2 class="c">Kasir ditutup</h2><div class="rc-sum"><div><small>Total penjualan</small><b>' + rp(r.total) + '</b></div><div><small>Selisih tunai</small><b style="color:' + (d === 0 ? 'var(--ok)' : 'var(--err)') + '">' + (d > 0 ? '+' : '') + rp(d) + '</b></div></div><p class="muted c">' + (d === 0 ? 'Uang laci sesuai.' : d > 0 ? 'Uang laci lebih dari catatan.' : 'Uang laci kurang dari catatan.') + '</p><div id="tlist"></div>'; tutupList(); } catch (e) { toast(e.message); } });
+  return busy('Menutup kasir…', async () => { try { const mv = dnum(($('#tm') || {}).value); const r = await api('shift.close', {uang_fisik: v, modal_awal: isNaN(mv) || mv < 0 ? 0 : mv, catatan: ($('#tn') || {}).value || ''}); const d = r.selisih_tunai, kv2 = (a, b) => '<div class="kv"><span>' + a + '</span><span>' + b + '</span></div>';
+    $('#tbody').innerHTML = '<div class="okmark">' + svg('check', 30) + '</div><h2 class="c">Kasir ditutup</h2><div class="rc-sum"><div><small>Total penjualan</small><b>' + rp(r.total) + '</b></div><div><small>Selisih tunai</small><b style="color:' + (d === 0 ? 'var(--ok)' : 'var(--err)') + '">' + (d > 0 ? '+' : '') + rp(d) + '</b></div></div><p class="muted c">' + (d === 0 ? 'Uang laci sesuai.' : d > 0 ? 'Uang laci lebih dari catatan.' : 'Uang laci kurang dari catatan.') + '</p><div class="li" style="display:block">' + kv2('Penjualan tunai', rp(r.tunai)) + (r.retur_tunai ? kv2('Tunai dikembalikan (retur)', '-' + rp(r.retur_tunai)) : '') + kv2('Modal awal laci', rp(r.modal_awal)) + kv2('Seharusnya di laci', rp(r.modal_awal + r.tunai_bersih)) + kv2('Uang di laci', rp(r.uang_fisik)) + '</div><div id="tlist"></div>'; tutupList(); } catch (e) { toast(e.message); } });
 }
 
 /* ---------- Aksi (event delegation) ---------- */
@@ -975,7 +975,20 @@ const ACT = {
   dclear: () => { LS.set('errlog', []); vDiag(); toast('Catatan kesalahan dihapus'); },
   copyurl: () => copyText(location.href.split('#')[0], 'Alamat aplikasi disalin.'),
   qretry: el => { const q = S.queue[el.dataset.i]; if (q) { q.status = 'pending'; q.state = 'waiting'; q.error = ''; } LS.set('queue', S.queue); qrefresh(); flush(); },
-  qdel: el => { if (confirm('Hapus transaksi ini dari antrean? Stok di perangkat akan dikembalikan.')) { const q = S.queue.splice(el.dataset.i, 1)[0]; q.payload.items.forEach(it => { const v = vById(it.variant_id); if (v) v.stok = r6((Number(v.stok) || 0) + it.qty); }); LS.set('queue', S.queue); LS.set('data', S.data); badge(); qrefresh(); } },
+  qdel: async el => { const q = S.queue[el.dataset.i]; if (!q) return;
+    if (!navigator.onLine) return toast('Menghapus transaksi dari antrean dicatat ke server, jadi butuh koneksi internet.');
+    const alasan = (prompt('Alasan menghapus transaksi ' + rp(q.total) + ' dari antrean (wajib):') || '').trim(); if (alasan.length < 3) return toast('Alasan minimal 3 huruf');
+    if (!confirm('Hapus transaksi ini dari antrean? Penghapusan dicatat dan dilaporkan ke Owner. Stok di perangkat akan dikembalikan.')) return;
+    try { await api('sale.reject_log', {request_id: q.payload.request_id || q.rid, channel_id: q.payload.channel_id, total: q.total, metode_bayar: q.payload.metode_bayar, error: q.error || '', alasan: alasan, client_ts: q.ts,
+      items: q.payload.items.map(it => { const v = vById(it.variant_id); return {variant_id: it.variant_id, qty: it.qty, nama: v ? vName(v) + ' ' + [v.ukuran, v.level_pedas].filter(Boolean).join(' · ') : ''}; })}); }
+    catch (e) { return toast(e.server ? e.message : 'Butuh koneksi internet untuk mencatat penghapusan.'); }
+    const i = S.queue.indexOf(q); if (i < 0) return; S.queue.splice(i, 1); q.payload.items.forEach(it => { const v = vById(it.variant_id); if (v) v.stok = r6((Number(v.stok) || 0) + it.qty); }); LS.set('queue', S.queue); LS.set('data', S.data); badge(); qrefresh(); },
+  svoid: async el => { const id = el.dataset.id, nomor = el.dataset.n; if (!id) return;
+    const alasan = (prompt('Alasan membatalkan transaksi ' + nomor + ' (wajib):') || '').trim(); if (alasan.length < 3) return toast('Alasan minimal 3 huruf');
+    if (!confirm('Batalkan transaksi ' + nomor + '? Stok dikembalikan dan omzet berkurang. Tindakan ini dicatat.')) return;
+    let tok = ''; if (!own()) { tok = await askOwner('Pembatalan transaksi ' + nomor + ' butuh persetujuan Owner.', 'void', id, 0); if (!tok) return; }
+    try { const r = await busy('Membatalkan transaksi…', () => api('sale.void', {id: id, alasan: alasan, override_token: tok})); toast('Transaksi dibatalkan' + (r.tunai_kembali ? ' · kembalikan tunai ' + rp(r.tunai_kembali) + ' ke pelanggan' : '')); try { await loadData(); } catch (e) {} vRiwayat(); }
+    catch (e) { toast(e.server ? e.message : 'Pembatalan butuh koneksi internet.'); } },
   stab: el => { S.stab = el.dataset.s; S.scat = 'Semua'; S.sq = ''; vStok(); },
   adj: el => adjSheet(el.dataset.t, el.dataset.id), adjsave: el => adjSave(el.dataset.t, el.dataset.id),
   pbopen: pbSheet, pbdel: el => { S.pb.items.splice(el.dataset.i, 1); pbSheet(); }, pbsave: pbSave,
