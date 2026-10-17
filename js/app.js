@@ -47,6 +47,7 @@ const Store = (() => {
     del: k => { delete mem[k]; if (idb) { if (CRIT.indexOf(k) >= 0) journal(k, {x: 1}); dirty[k] = 2; if (CRIT.indexOf(k) >= 0) flushNow(); else { clearTimeout(timer); timer = setTimeout(flushNow, 400); } } else { try { localStorage.removeItem(k); } catch (e) {} } }
   };
 })();
+const devId = () => { let d = LS.get('dev', ''); if (!/^[0-9a-f]{32}$/.test(d)) { const a = new Uint8Array(16); (window.crypto && window.crypto.getRandomValues) ? window.crypto.getRandomValues(a) : a.forEach((_, i) => { a[i] = Math.floor(Math.random() * 256); }); d = Array.from(a, b => ('0' + b.toString(16)).slice(-2)).join(''); LS.set('dev', d); } return d; }; // id perangkat untuk penguncian login (server hanya menyimpan hash-nya)
 const LS = {get: Store.get, set: (k, v) => Store.set(k, v, ['queue', 'cart', 'token', 'hideOut', 'metode', 'ch'].indexOf(k) >= 0), del: Store.del};
 const T = v => String(v).toUpperCase() === 'TRUE';
 const APP = window.APP = {views: {}};
@@ -78,7 +79,8 @@ async function api(action, payload, opt) {
   try {
     const r = await fetch(C.API_URL, {method: 'POST', headers: {'Content-Type': 'text/plain;charset=utf-8'}, body: JSON.stringify({action: action, token: S.token, payload: payload || {}})});
     const j = await r.json();
-    if (!j.ok) { const e = new Error(j.error); e.server = true; e.auth = /^Sesi/.test(j.error); throw e; }
+    if (!j.ok) { const e = new Error(j.error); e.server = true; e.retry = !!j.retry; e.auth = /^Sesi/.test(j.error); throw e; } // retry: galat sementara di server (kunci penuh, kuota), aman diulang
+    if (S.data) { if (j.cat_ver && j.cat_prev && S.data.cat_ver === j.cat_prev) S.data.cat_ver = j.cat_ver; if (j.stock_ver && j.stock_prev && S.data.stock_ver === j.stock_prev) S.data.stock_ver = j.stock_ver; }
     if (j.ver && S.data && j.ver_prev && S.data.ver === j.ver_prev) S.data.ver = j.ver; // perubahan ini dibuat perangkat ini sendiri: tidak perlu muat ulang
     return j.data;
   } finally { if (!silent) { pending--; netState(); } }
@@ -95,14 +97,22 @@ function applyQueueStock() {
   S.queue.forEach(q => { if (q.status === 'pending') q.payload.items.forEach(it => { const v = vById(it.variant_id); if (v) v.stok = (Number(v.stok) || 0) - it.qty; }); });
 }
 async function loadData() { S.data = await api('bootstrap'); applyQueueStock(); S.lastSync = Date.now(); LS.set('lastsync', S.lastSync); LS.set('data', S.data); if (S.cat !== 'Semua' && !S.data.products.some(p => p.kategori === S.cat)) S.cat = 'Semua'; }
+async function refreshStock() { // menyegarkan stok produk jadi dari server; false bila server belum mengenal stock.get (klien memuat penuh)
+  let r; try { r = await api('stock.get', {}, {silent: true}); } catch (e) { if (e.server && /Aksi tidak dikenal/.test(e.message)) return false; throw e; }
+  S.data.variants.forEach(v => { if (r.stok[v.id] !== undefined) v.stok = r.stok[v.id]; });
+  applyQueueStock(); S.data.stock_ver = r.stock_ver; S.data.ver = r.ver; S.lastSync = Date.now(); LS.set('lastsync', S.lastSync); LS.set('data', S.data); return true;
+}
 /* Sinkronisasi hanya bila perlu: cek versi data (ping senyap, tanpa animasi); muat ulang penuh hanya jika versi berubah. Tanpa polling berkala. */
 let lastChk = 0;
 async function checkUpdates(force) {
   if (!S.token || !S.data || (!force && Date.now() - lastChk < 30000)) return;
   lastChk = Date.now();
   try {
-    const p = await api('ping', {}, {silent: true});
-    if (p.ver !== S.data.ver) { await loadData(); if ($('#sheet').hidden && !S.dirty) render(); else S.deferRender = true; toast('Data terbaru dimuat'); }
+    const p = await api('ping', {}, {silent: true}), redraw = () => { if ($('#sheet').hidden && !S.dirty) render(); else S.deferRender = true; };
+    if (p.cat_ver !== undefined) { // server baru: katalog dimuat penuh hanya bila katalognya berubah; bila hanya stok (penjualan perangkat lain) cukup peta stok kecil
+      if (p.cat_ver !== S.data.cat_ver) { await loadData(); redraw(); toast('Data terbaru dimuat'); }
+      else if (p.stock_ver !== S.data.stock_ver) { if (await refreshStock()) redraw(); else { await loadData(); redraw(); } }
+    } else if (p.ver !== S.data.ver) { await loadData(); redraw(); toast('Data terbaru dimuat'); }
   } catch (e) { if (e.auth) softLogout(); }
 }
 let flushing = false, flushDelay = 15000, flushTimer = null;
@@ -117,7 +127,7 @@ function scheduleFlush() { // percobaan ulang hanya selama ada transaksi tertund
 }
 async function sendBatch(batch) { // satu permintaan untuk banyak transaksi; mundur ke satu per satu bila server lama belum mengenal sale.batch
   if (!S.noBatch) { try { return await api('sale.batch', {sales: batch.map(payloadOf)}); } catch (e) { if (!(e.server && /Aksi tidak dikenal/.test(e.message))) throw e; S.noBatch = true; } }
-  const out = []; for (const q of batch) { try { out.push({ok: true, data: await api('sale.create', payloadOf(q))}); } catch (e) { if (!e.server) throw e; out.push({ok: false, error: e.message}); } } return out;
+  const out = []; for (const q of batch) { try { out.push({ok: true, data: await api('sale.create', payloadOf(q))}); } catch (e) { if (!e.server) throw e; out.push({ok: false, error: e.message, retry: !!e.retry}); } } return out;
 }
 async function flush() {
   if (flushing || !S.token || !S.data || !hasPending()) return;
@@ -125,15 +135,17 @@ async function flush() {
   flushing = true; let netFail = false;
   try {
     while (hasPending() && !netFail) {
-      const batch = mine().slice(0, 10); batch.forEach(q => { q.state = 'sending'; q.tries = (q.tries || 0) + 1; q.lastTry = Date.now(); }); badge(); let res;
+      /* batch kecil: kunci server dipegang singkat dan kasir lain tidak menunggu lama */ const batch = mine().slice(0, 4); batch.forEach(q => { q.state = 'sending'; q.tries = (q.tries || 0) + 1; q.lastTry = Date.now(); }); badge(); let res;
       try { res = await sendBatch(batch); }
       catch (e) {
         if (e.auth) { softLogout(); break; }
-        batch.forEach(q => { q.error = e.server ? e.message : 'Tidak ada koneksi ke server'; if (e.server) { q.status = 'review'; q.state = 'error'; } else q.state = 'waiting'; });
-        if (!e.server) netFail = true; LS.set('queue', S.queue); continue;
+        const transient = !e.server || e.retry; // jaringan putus, atau server menandai galat sementara: tetap antre dan coba lagi dengan jeda makin panjang
+        batch.forEach(q => { q.error = !e.server ? 'Tidak ada koneksi ke server' : e.retry ? 'Server sibuk, dicoba lagi otomatis' : e.message; if (!transient) { q.status = 'review'; q.state = 'error'; } else q.state = 'waiting'; });
+        if (transient) netFail = true; LS.set('queue', S.queue); continue;
       }
       batch.forEach((q, i) => { const r = res[i];
         if (r && r.ok) { const d = r.data || {}; if (d.sale) S.nomor[q.rid] = d.sale.nomor; if (d.peringatan) toast(d.peringatan); S.queue = S.queue.filter(x => x !== q); Object.keys(d.stok || {}).forEach(id => { const v = vById(id); if (v) v.stok = r6(d.stok[id] - pendingQty(id)); }); }
+        else if (r && r.retry) { q.state = 'waiting'; q.error = 'Server sibuk, dicoba lagi otomatis'; netFail = true; }
         else { q.status = 'review'; q.state = 'error'; q.error = (r && r.error) || 'Ditolak server'; } });
       LS.set('queue', S.queue); refreshRc(); flushDelay = 15000;
     }
@@ -439,7 +451,7 @@ async function doLogin() {
   const u = $('#lu').value.trim(), p = $('#lp').value; if (!u || !p) return;
   $('#lerr').textContent = '';
   await busy('Masuk…', async () => { try {
-    const r = await api('login', {username: u, pin: p}); S.token = r.token;
+    const r = await api('login', {username: u, pin: p, dev: devId()}); S.token = r.token;
     /* Penguncian ganti user: antrean pengguna lain yang belum terkirim tidak boleh tertinggal atau tercampur. */
     const other = S.queue.filter(q => q.uid !== r.uid);
     if (other.length) {
@@ -620,7 +632,7 @@ function askOwner(msg, kind, rid, nilai) {
 async function opinOk() {
   const o = S.opin; if (!o) return; const u = ($('#ou') || {}).value, pw = ($('#op') || {}).value; if (!u || !pw) return;
   $('#oerr').textContent = '';
-  try { const r = await api('override.grant', {kind: o.kind, request_id: o.rid, nilai: o.nilai, username: u.trim(), pin: pw}); LS.set('ownerUser', u.trim()); S.opin = null; closeSheet(); o.res(r.token); }
+  try { const r = await api('override.grant', {kind: o.kind, request_id: o.rid, nilai: o.nilai, username: u.trim(), pin: pw, dev: devId()}); LS.set('ownerUser', u.trim()); S.opin = null; closeSheet(); o.res(r.token); }
   catch (e) { $('#oerr').textContent = e.server ? e.message : 'Otorisasi butuh koneksi internet.'; }
 }
 async function pay() {
