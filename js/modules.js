@@ -19,7 +19,7 @@ function hppCheck(from, to) {
   const k = from + '|' + to; if (hc[k] && Date.now() - hc[k].t < 60000) return Promise.resolve(hc[k].v);
   return api('report.get', {type: 'penjualan', from: from, to: to}, {silent: true}).then(r => { const v = hppOf(r.rows); hc[k] = {t: Date.now(), v: v}; return v; });
 }
-const hppOf = rows => { const bad = rows.filter(x => !(Number(x[4]) > 0)); return {n: bad.length, names: bad.map(x => (x[0] + ' ' + x[1]).trim())}; };
+const hppOf = rows => { const bad = rows.filter(x => !(Number(x[5]) > 0)); return {n: bad.length, names: bad.map(x => (x[0] + ' ' + x[1]).trim())}; };
 const warnBanner = v => '<div class="warn-b" role="alert"><div><b>Laba belum akurat:</b> ' + v.n + ' produk belum punya resep/HPP<div class="muted">' + esc(v.names.slice(0, 3).join(', ')) + (v.names.length > 3 ? ' dan ' + (v.names.length - 3) + ' lainnya' : '') + '</div></div><button class="btn pri sm" data-act="go_resep">Lengkapi di Resep</button></div>';
 const qMark = '<span class="q-m" title="HPP belum diisi, margin belum bisa dihitung" aria-label="margin belum bisa dihitung">?</span>';
 
@@ -49,11 +49,11 @@ function donut(parts, total) {
   const segs = parts.map((p, i) => { const len = total ? p.omzet / total * Cc : 0, s = '<circle r="' + R + '" cx="60" cy="60" fill="none" stroke="' + COL[i % 5] + '" stroke-width="22" stroke-dasharray="' + len + ' ' + (Cc - len) + '" stroke-dashoffset="' + (-off) + '" transform="rotate(-90 60 60)"/>'; off += len; return s; }).join('');
   return '<svg viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Komposisi penjualan per channel"><circle r="' + R + '" cx="60" cy="60" fill="none" stroke="#F1E3CC" stroke-width="22"/>' + segs + '</svg>';
 }
-const CMP = {hari: 'vs kemarin', minggu: 'vs 7 hari sebelumnya', bulan: 'vs periode sebelumnya'};
+const CMP = {hari: 'vs hari sama minggu lalu', minggu: 'vs 7 hari sebelumnya', bulan: 'vs periode sama bulan lalu'};
 function drawDash(d) {
   const c = d.cur, p = d.prev, tot = d.channels.reduce((a, x) => a + x.omzet, 0), maxQ = Math.max(1, ...d.top.map(t => t.qty)), lab = CMP[d.period] || 'vs sebelumnya';
-  const days = Math.round((new Date(d.to + 'T12:00:00') - new Date(d.from + 'T12:00:00')) / 86400000) + 1, pto = A.addDays(d.from, -1), pfrom = A.addDays(pto, -(days - 1)); S.dser = d.series;
-  $('#dbody').innerHTML = '<div id="hppw"></div><p class="muted rcap">' + esc(idRange(d.from, d.to)) + ' · omzet tanpa PPN · pembanding: ' + esc(idRange(pfrom, pto)) + '</p><div class="kgrid">' +
+  const days = Math.round((new Date(d.to + 'T12:00:00') - new Date(d.from + 'T12:00:00')) / 86400000) + 1, pto = d.pto || A.addDays(d.from, -1), pfrom = d.pfrom || A.addDays(pto, -(days - 1)); S.dser = d.series;
+  $('#dbody').innerHTML = '<div id="hppw"></div>' + (d.stok_minus && d.stok_minus.length ? '<div class="warn-b" role="alert"><div><b>Stok minus, perlu opname:</b> ' + esc(d.stok_minus.slice(0, 4).map(x => x.nama + ' (' + dec(x.stok) + ')').join(', ')) + (d.stok_minus.length > 4 ? ' dan ' + (d.stok_minus.length - 4) + ' lainnya' : '') + '<div class="muted">Penjualan tetap tercatat; stok server lebih kecil dari stok fisik.</div></div><button class="btn pri sm" data-act="tab" data-t="stok">Buka Stok</button></div>' : '') + (d.peringatan || []).map(w => '<div class="warn-b" role="alert"><div>' + esc(w) + '</div><button class="btn pri sm" data-act="go_settings">Pengaturan</button></div>').join('') + '<p class="muted rcap">' + esc(idRange(d.from, d.to)) + ' · omzet tanpa PPN · pembanding: ' + esc(idRange(pfrom, pto)) + '</p><div class="kgrid">' +
     kpi('Omzet', rp(c.omzet), delta(c.omzet, p.omzet, lab)) + kpi('Transaksi', num(c.trx), 'Rata-rata ' + rp(c.trx ? c.omzet / c.trx : 0)) +
     kpi('Laba kotor', rp(c.laba), '<span id="mgn">' + (c.omzet ? pct(c.laba / c.omzet * 100) : '0%') + ' margin</span>') + kpi('Laba bersih', rp(d.laba_bersih), 'setelah fee dan biaya') + '</div>' +
     '<div class="li" style="display:block"><b>Omzet dan laba kotor</b><div class="muted">' + (d.period === 'bulan' ? 'Bulan berjalan' : '7 hari terakhir') + '<span class="lgd" style="background:#F28C1B"></span>Omzet<span class="lgd" style="background:#4A1414"></span>Laba kotor</div><div class="btip" id="bt" aria-live="polite">Ketuk batang untuk melihat nilai harian</div>' + barChart(d.series) + '</div>' +

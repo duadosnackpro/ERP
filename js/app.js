@@ -679,10 +679,10 @@ async function vRiwayat() {
   $('#rq').innerHTML = qs;
   try {
     const rows = await api('sales.list', {tanggal: day}); if (S.tab !== 'riwayat' || !$('#rlist')) return;
-    const done = rows.filter(r => r.status === 'selesai'), omzet = done.reduce((a, r) => a + Number(r.total), 0), avg = done.length ? omzet / done.length : 0;
-    $('#rsum').innerHTML = '<div class="kgrid"><div class="kpi"><div class="muted">Omzet</div><b>' + rp(omzet) + '</b></div><div class="kpi"><div class="muted">Transaksi</div><b>' + done.length + '</b></div><div class="kpi wide"><div class="muted">Rata-rata per transaksi</div><b>' + rp(avg) + '</b></div>' + (own() ? '<div class="kpi wide"><div class="muted">Produk terlaris</div><b id="rtop">' + (done.length ? 'Memuat…' : '-') + '</b></div>' : '') + '</div>';
+    const done = rows.filter(r => r.status === 'selesai'), nTrx = done.filter(r => !r.ref_sale_id).length, omzet = done.reduce((a, r) => a + Number(r.total), 0), avg = nTrx ? omzet / nTrx : 0; // retur (nilai minus) mengurangi omzet tetapi tidak dihitung sebagai transaksi
+    $('#rsum').innerHTML = '<div class="kgrid"><div class="kpi"><div class="muted">Omzet</div><b>' + rp(omzet) + '</b></div><div class="kpi"><div class="muted">Transaksi</div><b>' + nTrx + '</b></div><div class="kpi wide"><div class="muted">Rata-rata per transaksi</div><b>' + rp(avg) + '</b></div>' + (own() ? '<div class="kpi wide"><div class="muted">Produk terlaris</div><b id="rtop">' + (done.length ? 'Memuat…' : '-') + '</b></div>' : '') + '</div>';
     if (own() && done.length) api('report.get', {type: 'penjualan', from: day, to: day}, {silent: true}).then(r => { const el = $('#rtop'); if (!el) return; const best = r.rows.slice().sort((a, b) => b[2] - a[2])[0]; el.innerHTML = best ? esc((best[0] + ' ' + best[1]).trim()) + ' <small class="muted">' + qf(best[2]) + ' terjual</small>' : '-'; }).catch(() => { const el = $('#rtop'); if (el) el.textContent = '-'; });
-    $('#rlist').innerHTML = rows.map(r => '<div class="li"><div><b>' + esc(r.nomor) + '</b><div class="muted">' + esc(String(r.tanggal).slice(11, 16)) + ' · ' + esc(chName(r.channel_id)) + ' · ' + esc(r.metode_bayar) + '</div></div><b>' + rp(r.total) + '</b></div>').join('') ||
+    $('#rlist').innerHTML = rows.map(r => '<div class="li"><div><b>' + esc(r.nomor) + '</b>' + (r.ref_sale_id ? ' <span class="tag red">Retur</span>' : '') + '<div class="muted">' + esc(String(r.tanggal).slice(11, 16)) + ' · ' + esc(chName(r.channel_id)) + ' · ' + esc(r.metode_bayar) + '</div></div><div class="r"><b>' + rp(r.total) + '</b>' + (r.status === 'selesai' && !r.ref_sale_id ? '<div><button class="chip" data-act="retur" data-id="' + esc(r.id) + '">Retur</button></div>' : '') + '</div></div>').join('') ||
       emptyState('riwayat', 'Belum ada transaksi', 'Tidak ada transaksi pada ' + esc(idDate(day)) + '.', '<button class="btn pri" data-act="tab" data-t="kasir">Mulai transaksi</button>');
   } catch (e) { if ($('#rlist')) $('#rlist').innerHTML = '<p class="muted">Tidak bisa memuat riwayat dari server (' + esc(e.message) + ').</p>'; }
 }
@@ -783,13 +783,14 @@ const MT = {
   materials: {l: 'Bahan dan kemasan', k: 'materials', f: [['nama', 'Nama'], ['tipe', 'Tipe', 'sel:bahan,kemasan,barang jadi beli'], ['satuan', 'Satuan (kg, gram, pcs)'], ['stok_minimum', 'Stok minimum', 'number'], ['satuan_kecil', 'Satuan kecil untuk resep (opsional, mis. ml)'], ['faktor_kecil', 'Isi satuan kecil per 1 satuan (mis. 1000)', 'number']], t: r => r.nama + ' (' + r.satuan + ')'},
   suppliers: {l: 'Supplier', k: 'suppliers', f: [['nama', 'Nama'], ['kontak', 'Kontak'], ['catatan', 'Catatan']], t: r => r.nama},
   expenses: {l: 'Biaya operasional', k: 'expenses', f: [['tanggal', 'Tanggal', 'date'], ['kategori', 'Kategori', 'sel:Gas,Listrik,Air,Sewa,Gaji/Tenaga kerja,Transport,Pemasaran,Lain-lain'], ['nominal', 'Nominal (Rp)', 'number'], ['catatan', 'Catatan']], t: r => String(r.tanggal).slice(0, 10) + ' · ' + r.kategori + ' · ' + rp(r.nominal)},
-  channels: {l: 'Channel', k: 'channels', f: [['nama', 'Nama'], ['fee_persen', 'Fee (%)', 'number'], ['fee_tetap', 'Fee tetap (Rp)', 'number']], t: r => r.nama + ' · fee ' + (r.fee_persen || 0) + '%'}
+  channels: {l: 'Channel', k: 'channels', f: [['nama', 'Nama'], ['fee_persen', 'Fee (%)', 'number'], ['fee_tetap', 'Fee tetap (Rp)', 'number'], ['basis_fee', 'Fee dihitung dari', 'sel2:total|Total bayar (termasuk PPN),subtotal|Subtotal (sebelum diskon),omzet|Omzet bersih (tanpa PPN)']], t: r => r.nama + ' · fee ' + (r.fee_persen || 0) + '%'}
 };
 Object.keys(MT).forEach(k => RT[MT[k].k] = MT[k].t);
 function field(f, val) {
   const k = f[0], l = f[1], t = f[2] || '', v = val == null ? '' : val;
   if (t.indexOf('ref:') === 0) { const key = t.slice(4); return '<label>' + l + '<select class="inp" data-f="' + k + '"><option value="">- pilih -</option>' + S.data[key].map(r => '<option value="' + esc(r.id) + '"' + (r.id === v ? ' selected' : '') + '>' + esc(RT[key](r)) + '</option>').join('') + '</select></label>'; }
   if (t.indexOf('sel:') === 0) return '<label>' + l + '<select class="inp" data-f="' + k + '">' + t.slice(4).split(',').map(o => '<option' + (o === v ? ' selected' : '') + '>' + o + '</option>').join('') + '</select></label>';
+  if (t.indexOf('sel2:') === 0) return '<label>' + l + '<select class="inp" data-f="' + k + '">' + t.slice(5).split(',').map(o => { const p = o.split('|'); return '<option value="' + p[0] + '"' + (p[0] === v ? ' selected' : '') + '>' + p[1] + '</option>'; }).join('') + '</select></label>';
   if (t === 'date') return '<label>' + l + '<input type="date" class="inp" data-f="' + k + '" value="' + esc(String(v).slice(0, 10)) + '"></label>';
   const uq = a => Array.from(new Set(a.filter(Boolean))), D = S.data || {products: [], variants: []};
   const sug = k === 'kategori' ? uq((D.products || []).map(p => p.kategori)) : k === 'ukuran' ? uq((D.variants || []).map(x => x.ukuran).concat(['50 g', '100 g', '250 g', '500 g'])) :
@@ -898,7 +899,7 @@ function vSettings() {
     card('Kontrol kasir', field(['diskon_maks_persen', 'Batas diskon kasir (% dari subtotal)', 'number'], g('diskon_maks_persen', '10')) + '<p class="muted">Di atas batas ini, kasir butuh PIN Owner. Owner tidak dibatasi.</p>' + sw('bayar_tunai', 'Metode: Tunai') + sw('bayar_transfer', 'Metode: Transfer') + sw('bayar_qris', 'Metode: QRIS') + sw('tolak_selisih_total', 'Tolak transaksi bila total struk berbeda dari server', 'Disarankan aktif. Owner dapat menyetujui kasus tertentu dengan PIN.')) +
     card('Email laporan dan backup', field(['email_laporan', 'Email laporan harian (audit stok, backup)'], s.email_laporan) + field(['backup_email', 'Email cadangan terpisah (salinan .xlsx mingguan)'], s.backup_email) + '<p class="muted">Kosongkan email laporan untuk memakai email akun Google pemilik Apps Script.</p>') +
     card('Printer', sw('auto_cetak', 'Langsung cetak setelah bayar', 'RawBT (Android) atau printer Bluetooth BLE') + '<button class="btn sec sm" data-act="go_diag">Atur dan uji printer</button>') +
-    card('HPP & Overhead', selF('metode_overhead', 'Cara menghitung overhead', [['per_unit', 'Per bungkus'], ['per_batch', 'Per sekali produksi']], g('metode_overhead', 'per_unit')) + '<p class="muted" id="oh-hint"></p><div id="oh-unit">' + field(['overhead_per_unit', 'Overhead per bungkus (Rp)', 'number'], s.overhead_per_unit) + '</div><div id="oh-batch">' + field(['overhead_per_batch', 'Overhead per sekali produksi (Rp)', 'number'], s.overhead_per_batch) + '</div>' + field(['target_margin', 'Target margin minimum (%)', 'number'], g('target_margin', 30))) +
+    card('HPP & Overhead', selF('metode_overhead', 'Cara menghitung overhead', [['per_unit', 'Per bungkus'], ['per_batch', 'Per sekali produksi']], g('metode_overhead', 'per_unit')) + '<p class="muted" id="oh-hint"></p><div id="oh-unit">' + field(['overhead_per_unit', 'Overhead per bungkus (Rp)', 'number'], s.overhead_per_unit) + '</div><div id="oh-batch">' + field(['overhead_per_batch', 'Overhead per sekali produksi (Rp)', 'number'], s.overhead_per_batch) + '</div>' + field(['target_margin', 'Target margin minimum (%)', 'number'], g('target_margin', 30)) + field(['kelipatan_harga', 'Pembulatan harga rekomendasi ke atas (Rp)', 'number'], g('kelipatan_harga', '500')) + field(['kategori_masuk_hpp', 'Kategori biaya yang SUDAH masuk HPP (pisahkan koma, mis. Listrik, Gas)'], s.kategori_masuk_hpp) + '<p class="muted">Biaya pada kategori ini tidak dipotong lagi dari laba bersih, supaya tidak terhitung dua kali.</p><button class="btn sec sm" data-act="ohsaran">Hitung saran overhead dari biaya bulan lalu</button><p class="muted" id="oh-saran"></p>') +
     card('Zona berbahaya', '<p class="muted">Pemutihan data: menghapus riwayat transaksi. Data master tidak dihapus dan cadangan Google Drive dibuat otomatis lebih dulu.</p><button class="btn dan sm" data-act="resetopen">Reset data transaksi…</button>') +
     '</div><div class="savebar"><button class="btn pri big" id="ssavebtn" data-act="ssave" disabled>Simpan pengaturan</button></div>';
   S.sSnap = setSnap(); S.dirty = false; sDepUpd();
@@ -906,7 +907,7 @@ function vSettings() {
 async function sSave() {
   return busy('Menyimpan pengaturan…', async () => {
   const v = {}; document.querySelectorAll('#sf [data-f]').forEach(e => v[e.dataset.f] = e.type === 'checkbox' ? e.checked : e.value);
-  ['ppn_persen', 'overhead_per_unit', 'overhead_per_batch', 'target_margin', 'stok_menipis', 'diskon_maks_persen'].forEach(k => { if (k in v) { const n = dnum(v[k]); v[k] = isNaN(n) ? 0 : n; } });
+  ['ppn_persen', 'overhead_per_unit', 'overhead_per_batch', 'target_margin', 'stok_menipis', 'diskon_maks_persen', 'kelipatan_harga'].forEach(k => { if (k in v) { const n = dnum(v[k]); v[k] = isNaN(n) ? 0 : n; } });
   try { await api('setting.setMany', {values: v}); S.dirty = false; await loadData(); render(); toast('Pengaturan tersimpan'); } catch (e) { toast(e.message); }
   });
 }
@@ -914,22 +915,55 @@ async function sSave() {
 /* ---------- Tutup kasir ---------- */
 async function vTutup() {
   const back = '<button class="chip" data-act="tab" data-t="menu">← Menu</button>';
-  $('#main').innerHTML = back + '<div class="li" style="display:block;margin-top:8px"><b>Tutup kasir</b><p class="muted">Rekap penjualan Anda sejak penutupan terakhir. Hitung uang tunai di laci, isi jumlahnya, lalu tutup.</p></div><div id="tbody">' + skel(3) + '</div>';
+  $('#main').innerHTML = back + '<div class="li" style="display:block;margin-top:8px"><b>Tutup kasir</b><p class="muted">Hitung uang tunai di laci lebih dulu, isi jumlahnya, lalu tutup. Rekap penjualan baru tampil setelah penutupan (hitung buta) agar selisihnya jujur.</p></div><div id="tbody">' + skel(3) + '</div>';
   const unsent = mineAll().length;
   if (unsent) { flush(); $('#tbody').innerHTML = '<div class="notice"><span>Masih ada ' + unsent + ' transaksi yang belum terkirim ke server. Kirim dulu agar rekap lengkap.</span><button class="chip" data-act="tab" data-t="tutup">Periksa lagi</button></div><button class="btn pri" data-act="qnow">Kirim sekarang</button>'; return; }
   try {
     const r = await api('shift.summary', {}); if (S.tab !== 'tutup' || !$('#tbody')) return; S.shift = r; const kv = (a, b) => '<div class="kv"><span>' + a + '</span><span>' + b + '</span></div>';
-    $('#tbody').innerHTML = '<div class="li" style="display:block">' + kv('Sejak', esc(String(r.dari).slice(0, 16))) + kv('Jumlah transaksi', num(r.jumlah_trx)) + kv('Tunai', rp(r.tunai)) + kv('Transfer', rp(r.transfer)) + kv('QRIS', rp(r.qris)) + (r.lain ? kv('Lainnya', rp(r.lain)) : '') + kv('<b>Total</b>', '<b>' + rp(r.total) + '</b>') + '</div>' +
-      '<label>Uang tunai di laci (Rp)<input class="inp" id="tf" inputmode="numeric" placeholder="' + num(r.tunai) + '"></label><label>Catatan (opsional)<input class="inp" id="tn"></label><button class="btn pri big" data-act="tclose">Tutup kasir</button><div id="tlist"></div>';
+    $('#tbody').innerHTML = '<div class="li" style="display:block">' + kv('Sejak', esc(String(r.dari).slice(0, 16))) + kv('Jumlah transaksi', num(r.jumlah_trx)) + '</div>' +
+      '<label>Modal awal laci (Rp)<input class="inp" id="tm" inputmode="numeric" placeholder="0" value="' + (r.modal_terakhir ? esc(r.modal_terakhir) : '') + '"></label>' +
+      '<label>Kas keluar tunai selama shift (Rp)<input class="inp" id="tk" inputmode="numeric" placeholder="0"></label><p class="muted" style="margin:-4px 0 6px">Mis. beli es batu atau plastik memakai uang laci.</p>' +
+      '<label>Uang tunai di laci sekarang (Rp)<input class="inp" id="tf" inputmode="numeric" placeholder="Hitung dulu, lalu isi"></label><label>Catatan (opsional)<input class="inp" id="tn"></label><button class="btn pri big" data-act="tclose">Tutup kasir</button><div id="tlist"></div>';
     tutupList();
   } catch (e) { if (e.auth) softLogout(); else if ($('#tbody')) $('#tbody').innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }
 }
 async function tutupList() { try { const L = await api('shift.list', {}); if (!$('#tlist') && !$('#tbody')) return; const h = '<h3 style="margin:14px 0 6px">Penutupan terakhir</h3>' + (L.length ? L.slice(0, 10).map(x => '<div class="li" style="display:block"><div class="kv"><b>' + esc(x.kasir) + '</b><span>' + esc(String(x.sampai).slice(0, 16)) + '</span></div><div class="muted">' + num(x.jumlah_trx) + ' trx · total ' + rp(x.total_semua) + ' · tunai laci ' + rp(x.uang_fisik) + ' · selisih <b style="color:' + (Number(x.selisih_tunai) === 0 ? 'var(--ok)' : 'var(--err)') + '">' + rp(x.selisih_tunai) + '</b></div></div>').join('') : '<p class="muted">Belum ada.</p>'); const el = $('#tlist') || $('#tbody'); if (el) el.insertAdjacentHTML($('#tlist') ? 'beforeend' : 'beforeend', h); } catch (e) {} }
 async function tutupSimpan() {
-  const v = dnum(($('#tf') || {}).value); if (isNaN(v) || v < 0 || ($('#tf') || {}).value === '') return toast('Isi jumlah uang tunai di laci');
+  const v = dnum(($('#tf') || {}).value), opt = id => { const x = ($(id) || {}).value; return x === '' || x == null ? 0 : dnum(x); }, modal = opt('#tm'), keluar = opt('#tk');
+  if (isNaN(v) || v < 0 || ($('#tf') || {}).value === '') return toast('Isi jumlah uang tunai di laci');
+  if (isNaN(modal) || modal < 0 || isNaN(keluar) || keluar < 0) return toast('Modal awal dan kas keluar harus berupa angka 0 atau lebih');
   if (mineAll().length) return toast('Masih ada transaksi belum terkirim');
-  return busy('Menutup kasir…', async () => { try { const r = await api('shift.close', {uang_fisik: v, catatan: ($('#tn') || {}).value || ''}); const d = r.selisih_tunai;
-    $('#tbody').innerHTML = '<div class="okmark">' + svg('check', 30) + '</div><h2 class="c">Kasir ditutup</h2><div class="rc-sum"><div><small>Total penjualan</small><b>' + rp(r.total) + '</b></div><div><small>Selisih tunai</small><b style="color:' + (d === 0 ? 'var(--ok)' : 'var(--err)') + '">' + (d > 0 ? '+' : '') + rp(d) + '</b></div></div><p class="muted c">' + (d === 0 ? 'Uang laci sesuai.' : d > 0 ? 'Uang laci lebih dari catatan.' : 'Uang laci kurang dari catatan.') + '</p><div id="tlist"></div>'; tutupList(); } catch (e) { toast(e.message); } });
+  return busy('Menutup kasir…', async () => { try { const r = await api('shift.close', {uang_fisik: v, modal_awal: modal, kas_keluar: keluar, catatan: ($('#tn') || {}).value || ''}); const d = r.selisih_tunai, kv = (a, b) => '<div class="kv"><span>' + a + '</span><span>' + b + '</span></div>';
+    $('#tbody').innerHTML = '<div class="okmark">' + svg('check', 30) + '</div><h2 class="c">Kasir ditutup</h2><div class="li" style="display:block">' + kv('Jumlah transaksi', num(r.jumlah_trx)) + kv('Tunai (setelah retur)', rp(r.tunai)) + kv('Transfer', rp(r.transfer)) + kv('QRIS', rp(r.qris)) + (r.lain ? kv('Lainnya', rp(r.lain)) : '') + (r.retur ? kv('Retur di shift ini', rp(r.retur)) : '') + kv('<b>Total</b>', '<b>' + rp(r.total) + '</b>') + '</div>' +
+      '<div class="li" style="display:block">' + kv('Modal awal', rp(r.modal_awal)) + kv('Kas keluar', rp(r.kas_keluar)) + kv('Tunai seharusnya di laci', rp(r.tunai_diharapkan)) + kv('Uang di laci', rp(r.uang_fisik)) + '</div>' +
+      '<div class="rc-sum"><div><small>Selisih tunai</small><b style="color:' + (d === 0 ? 'var(--ok)' : 'var(--err)') + '">' + (d > 0 ? '+' : '') + rp(d) + '</b></div></div><p class="muted c">' + (d === 0 ? 'Uang laci sesuai.' : d > 0 ? 'Uang laci lebih dari catatan.' : 'Uang laci kurang dari catatan.') + '</p><div id="tlist"></div>'; tutupList(); } catch (e) { toast(e.message); } });
+}
+
+/* ---------- Retur (transaksi selesai tidak diubah; retur dicatat sebagai transaksi negatif) ---------- */
+S.retRid = {};
+async function returOpen(id) {
+  if (!navigator.onLine) return toast('Retur butuh koneksi internet');
+  let d; try { d = await api('sale.detail', {id: id}); } catch (e) { return toast(e.server ? e.message : 'Tidak bisa memuat transaksi (periksa koneksi)'); }
+  const L = d.items.filter(x => x.sisa > 0); if (!L.length) return toast('Semua item transaksi ini sudah diretur');
+  S.ret = {id: id, nomor: d.sale.nomor, lines: L};
+  sheet('<div class="grab"></div><h2>Retur ' + esc(d.sale.nomor) + '</h2><p class="muted">Isi jumlah yang dikembalikan pelanggan. Stok bertambah kembali. Transaksi asal tidak diubah; retur tercatat sebagai transaksi baru bernilai minus.' + (own() ? '' : ' Retur oleh kasir perlu PIN Owner.') + '</p>' +
+    L.map(l => { const v = vById(l.variant_id); return '<label>' + esc(v ? (vName(v) + ' ' + vSub(v)).trim() : 'Produk dihapus') + ' <small class="muted">(bisa diretur ' + qf(l.sisa) + ')</small><input class="inp" type="number" min="0" max="' + l.sisa + '" step="any" inputmode="decimal" data-rv="' + esc(l.variant_id) + '" value="0"></label>'; }).join('') +
+    '<button class="btn sec sm" data-act="retur_all">Retur semua sisa</button><label>Alasan retur (wajib)<input class="inp" id="ral" placeholder="mis. salah input, produk rusak, pelanggan batal"></label><div class="err" id="rerr"></div><button class="btn pri" data-act="retur_ok">Proses retur</button><button class="btn sec" data-act="close">Batal</button>');
+}
+async function returGo() {
+  const R = S.ret; if (!R) return; const items = [], err = m => { const e = $('#rerr'); if (e) e.textContent = m; };
+  document.querySelectorAll('#sheet [data-rv]').forEach(e => { const q = Number(e.value) || 0, l = R.lines.find(x => x.variant_id === e.dataset.rv); if (q > 0 && l) items.push({variant_id: l.variant_id, qty: q, max: l.sisa}); });
+  if (!items.length) return err('Isi jumlah retur minimal satu item.'); if (items.some(x => x.qty > x.max + 1e-9)) return err('Jumlah melebihi sisa yang bisa diretur.');
+  const alasan = (($('#ral') || {}).value || '').trim(); if (alasan.length < 3) return err('Alasan retur wajib diisi.');
+  const key = R.id + '|' + JSON.stringify(items.map(x => [x.variant_id, x.qty])) + '|' + alasan; // permintaan yang sama memakai request_id yang sama, jadi kirim ulang tidak menggandakan retur
+  const rid = S.retRid[key] || (S.retRid[key] = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(16).slice(2));
+  let tok = null; if (!own()) { tok = await askOwner('Retur ' + R.nomor + ': ' + alasan + '. Owner dapat menyetujui dengan PIN.', 'retur', rid, 0); }
+  try {
+    const res = await api('sale.return', {request_id: rid, id: R.id, items: items.map(x => ({variant_id: x.variant_id, qty: x.qty})), alasan: alasan, override_token: tok});
+    delete S.retRid[key]; closeSheet(); const d = res.sale || {};
+    Object.keys(res.stok || {}).forEach(id => { const v = vById(id); if (v) v.stok = r6(res.stok[id] - pendingQty(id)); }); LS.set('data', S.data);
+    toast(res.duplicate || res.cached ? 'Retur ini sudah tercatat sebelumnya' : 'Retur tercatat. Kembalikan ' + rp(res.refund) + ' ke pelanggan (' + (res.metode || '') + ')'); if (S.tab === 'riwayat') vRiwayat();
+  } catch (e) { if (e.auth) softLogout(); else toast(e.server ? e.message : 'Koneksi bermasalah. Ulangi retur yang sama; aman, tidak akan tercatat dua kali.'); }
 }
 
 /* ---------- Aksi (event delegation) ---------- */
@@ -975,7 +1009,17 @@ const ACT = {
   dclear: () => { LS.set('errlog', []); vDiag(); toast('Catatan kesalahan dihapus'); },
   copyurl: () => copyText(location.href.split('#')[0], 'Alamat aplikasi disalin.'),
   qretry: el => { const q = S.queue[el.dataset.i]; if (q) { q.status = 'pending'; q.state = 'waiting'; q.error = ''; } LS.set('queue', S.queue); qrefresh(); flush(); },
-  qdel: el => { if (confirm('Hapus transaksi ini dari antrean? Stok di perangkat akan dikembalikan.')) { const q = S.queue.splice(el.dataset.i, 1)[0]; q.payload.items.forEach(it => { const v = vById(it.variant_id); if (v) v.stok = r6((Number(v.stok) || 0) + it.qty); }); LS.set('queue', S.queue); LS.set('data', S.data); badge(); qrefresh(); } },
+  qdel: async el => {
+    const q = S.queue[el.dataset.i]; if (!q) return;
+    if (!navigator.onLine) return toast('Hubungkan internet dulu: penghapusan dicatat ke server agar ada jejaknya');
+    const alasan = prompt('Alasan menghapus transaksi ini (wajib). Uang pelanggan sudah diterima? Tulis di sini.'); if (alasan === null) return; if (alasan.trim().length < 3) return toast('Alasan wajib diisi');
+    try { await api('sale.reject_log', {request_id: q.rid, total: q.total, metode: q.payload.metode_bayar, channel: q.ch, waktu: fmtDT(q.ts), error: q.error || '', alasan: alasan.trim(), items: q.payload.items.map(it => { const v = vById(it.variant_id); return {sku: v ? v.sku : it.variant_id, qty: it.qty}; })}); }
+    catch (e) { return toast(e.auth ? 'Sesi berakhir, masuk lagi' : e.server ? e.message : 'Tidak ada koneksi; coba lagi'); }
+    const k = S.queue.indexOf(q); if (k < 0) return; S.queue.splice(k, 1); q.payload.items.forEach(it => { const v = vById(it.variant_id); if (v) v.stok = r6((Number(v.stok) || 0) + it.qty); }); LS.set('queue', S.queue); LS.set('data', S.data); badge(); qrefresh(); toast('Dihapus dan dicatat di server');
+  },
+  retur: el => returOpen(el.dataset.id), retur_ok: () => returGo(),
+  retur_all: () => { document.querySelectorAll('#sheet [data-rv]').forEach(e => { e.value = e.max; }); },
+  ohsaran: async () => { const el = $('#oh-saran'); try { const r = await api('overhead.saran', {}); if (r.saran_per_unit == null) { if (el) el.textContent = r.pesan || 'Belum bisa dihitung.'; return; } if (el) el.textContent = 'Bulan ' + r.bulan + ': biaya ' + rp(r.biaya) + ' dibagi ' + num(r.unit) + ' unit = ' + rp(r.saran_per_unit) + ' per bungkus. Diisikan ke kolom di atas; tekan Simpan pengaturan.'; const f = document.querySelector('#sf [data-f="overhead_per_unit"]'), m = document.querySelector('#sf [data-f="metode_overhead"]'); if (m && m.value !== 'per_unit') { m.value = 'per_unit'; m.dispatchEvent(new Event('change', {bubbles: true})); } if (f) { f.value = r.saran_per_unit; f.dispatchEvent(new Event('input', {bubbles: true})); } } catch (e) { toast(e.message); } },
   stab: el => { S.stab = el.dataset.s; S.scat = 'Semua'; S.sq = ''; vStok(); },
   adj: el => adjSheet(el.dataset.t, el.dataset.id), adjsave: el => adjSave(el.dataset.t, el.dataset.id),
   pbopen: pbSheet, pbdel: el => { S.pb.items.splice(el.dataset.i, 1); pbSheet(); }, pbsave: pbSave,
