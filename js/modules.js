@@ -49,7 +49,7 @@ function donut(parts, total) {
   const segs = parts.map((p, i) => { const len = total ? p.omzet / total * Cc : 0, s = '<circle r="' + R + '" cx="60" cy="60" fill="none" stroke="' + COL[i % 5] + '" stroke-width="22" stroke-dasharray="' + len + ' ' + (Cc - len) + '" stroke-dashoffset="' + (-off) + '" transform="rotate(-90 60 60)"/>'; off += len; return s; }).join('');
   return '<svg viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Komposisi penjualan per channel"><circle r="' + R + '" cx="60" cy="60" fill="none" stroke="#F1E3CC" stroke-width="22"/>' + segs + '</svg>';
 }
-const CMP = {hari: 'vs hari sama minggu lalu', minggu: 'vs 7 hari sebelumnya', bulan: 'vs periode sama bulan lalu'};
+const CMP = {hari: 'vs kemarin', minggu: 'vs 7 hari sebelumnya', bulan: 'vs periode sama bulan lalu'};
 function drawDash(d) {
   const c = d.cur, p = d.prev, tot = d.channels.reduce((a, x) => a + x.omzet, 0), maxQ = Math.max(1, ...d.top.map(t => t.qty)), lab = CMP[d.period] || 'vs sebelumnya';
   const days = Math.round((new Date(d.to + 'T12:00:00') - new Date(d.from + 'T12:00:00')) / 86400000) + 1, pto = d.pto || A.addDays(d.from, -1), pfrom = d.pfrom || A.addDays(pto, -(days - 1)); S.dser = d.series;
@@ -223,7 +223,7 @@ function runReport() {
   const el = $('#rres'); if (!el) return; el.innerHTML = skel(4); const want = S.rt;
   api('report.get', {type: want, from: S.rfrom, to: S.rto}).then(r => {
     if (S.tab !== 'laporan' || S.rt !== want || !$('#rres')) return; S.rres = r;
-    const mgIdx = r.type === 'penjualan' ? 6 : r.type === 'hpp' ? 7 : -1, cell = (row, i, v) => (i === mgIdx && !(Number(row[4]) > 0)) ? qMark : fmtCell(v, r.fmt[i]);
+    const mgHpp = r.type === 'penjualan' ? {7: 5} : r.type === 'hpp' ? {9: 5, 10: 6} : {}, cell = (row, i, v) => (mgHpp[i] !== undefined && !(Number(row[mgHpp[i]]) > 0)) ? qMark : (v === '' || v == null) && r.fmt[i] !== 'txt' ? '-' : fmtCell(v, r.fmt[i]); // margin tanpa HPP tampil ?; kolom angka kosong tampil -
     $('#rres').innerHTML = '<div id="hppw"></div><b>' + esc(r.title) + '</b> <span class="muted">' + (['stok', 'hpp'].indexOf(want) >= 0 ? 'kondisi saat ini' : esc(idRange(r.from, r.to))) + '</span>' +
       (r.peringatan ? '<div class="warn-b" role="alert"><div><b>Perhatian:</b> ' + esc(r.peringatan) + '</div></div>' : '') +
       (r.summary.length ? '<div class="kgrid" style="margin-top:8px">' + r.summary.map(s => kpi(esc(s.label), /^Margin/.test(s.label) ? '<span class="mgv" data-v="' + s.value + '">' + fmtCell(s.value, s.fmt) + '</span>' : fmtCell(s.value, s.fmt), '')).join('') + '</div>' : '') +
