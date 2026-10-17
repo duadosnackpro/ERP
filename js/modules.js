@@ -59,7 +59,7 @@ function drawDash(d) {
     '<div class="li" style="display:block"><b>Omzet dan laba kotor</b><div class="muted">' + (d.period === 'bulan' ? 'Bulan berjalan' : '7 hari terakhir') + '<span class="lgd" style="background:#F28C1B"></span>Omzet<span class="lgd" style="background:#4A1414"></span>Laba kotor</div><div class="btip" id="bt" aria-live="polite">Ketuk batang untuk melihat nilai harian</div>' + barChart(d.series) + '</div>' +
     '<div class="li" style="display:block"><b>Per channel</b><div style="display:flex;gap:12px;align-items:center">' + donut(d.channels, tot) + '<div style="flex:1">' + (d.channels.map((x, i) => '<div class="kv"><span><span class="lgd" style="background:' + COL[i % 5] + ';margin-left:0"></span>' + esc(x.nama) + '</span><span>' + (tot ? pct(x.omzet / tot * 100) : '0%') + '</span></div>').join('') || '<span class="muted">Belum ada penjualan</span>') + '</div></div></div>' +
     '<div class="li" style="display:block"><b>Produk terlaris</b>' + (d.top.map(t => '<div style="margin-top:6px"><div class="kv"><span>' + esc(t.nama) + '</span><span>' + num(t.qty) + ' pcs</span></div><div class="bar"><i style="width:' + Math.round(t.qty / maxQ * 100) + '%"></i></div></div>').join('') || '<div class="muted">Belum ada data</div>') + '</div>' +
-    '<div class="li" style="display:block"><b>Perlu perhatian</b>' + ((d.stok_minus || []).map(l => '<div class="kv"><span>' + esc(l.nama) + '</span><span><span class="tag red">Stok minus</span> ' + dec(l.stok) + '</span></div>').join('') + d.low.map(l => '<div class="kv"><span>' + esc(l.nama) + '</span><span><span class="tag">Menipis</span> ' + dec(l.stok) + ' ' + esc(l.satuan) + '</span></div>').join('') || '<div class="muted">Semua stok bahan aman</div>') + (d.n_stok_minus > (d.stok_minus || []).length ? '<div class="muted">dan ' + (d.n_stok_minus - d.stok_minus.length) + ' produk minus lainnya. Bereskan lewat Stok, Penyesuaian.</div>' : '') + (d.biaya ? kv('Biaya operasional', rp(d.biaya)) : '') + '</div>';
+    '<div class="li" style="display:block"><b>Perlu perhatian</b>' + (d.low.map(l => '<div class="kv"><span>' + esc(l.nama) + '</span><span><span class="tag">Menipis</span> ' + dec(l.stok) + ' ' + esc(l.satuan) + '</span></div>').join('') || '<div class="muted">Semua stok bahan aman</div>') + (d.biaya ? kv('Biaya operasional', rp(d.biaya)) : '') + '</div>';
   if (c.trx) hppCheck(d.from, d.to).then(v => { if (!v.n || !$('#hppw')) return; $('#hppw').innerHTML = warnBanner(v); const mg = $('#mgn'); if (mg && c.omzet && c.laba / c.omzet >= .995) mg.innerHTML = qMark + ' margin belum bisa dihitung'; }).catch(() => {});
 }
 
@@ -333,16 +333,7 @@ function vCek() {
     c.map(x => '<div class="li" style="display:block"><div class="kv"><b>' + esc(x.title) + '</b><span class="tag ' + (x.lv === 'err' ? 'red' : '') + '">' + (x.lv === 'err' ? 'Perbaiki' : 'Info') + ' · ' + x.items.length + '</span></div>' +
       '<div class="muted">' + x.items.slice(0, 8).map(esc).join(', ') + (x.items.length > 8 ? ' dan ' + (x.items.length - 8) + ' lainnya' : '') + '</div>' + (x.hint ? '<div class="muted">' + esc(x.hint) + '</div>' : '') +
       '<div style="margin-top:6px">' + x.extra + '<button class="chip" data-act="cekgo" data-t="' + x.go + '">Buka</button></div></div>').join('') +
-    '<div class="li" style="display:block"><b>Kesesuaian stok</b><p class="muted">Membandingkan stok setiap item dengan jumlah riwayat mutasinya di server. Selisih berarti ada perubahan stok di luar aplikasi (misalnya diedit langsung di Google Sheets).</p><button class="btn sec" data-act="caudit" style="margin-top:0">Periksa stok sekarang</button><div id="caud"></div></div>' +
-    '<div class="li" style="display:block"><b>Catatan kasir</b><p class="muted">Transaksi yang dihapus kasir dari antrean dan transaksi yang dibatalkan, lengkap dengan alasan.</p><button class="btn sec" data-act="crej" style="margin-top:0">Tampilkan catatan</button><div id="crej"></div></div>';
-}
-async function rejList() {
-  const el = $('#crej'); el.innerHTML = skel(2);
-  try {
-    const r = await api('sale.rejects', {}), row = (x, k) => '<div class="kv"><span>' + esc(String(x.tanggal).slice(5, 16)) + ' · ' + esc(x.kasir) + (k === 'v' ? ' · ' + esc(x.nomor) : '') + '</span><span>' + rp(x.total) + '</span></div><div class="muted">' + esc(x.alasan) + (k === 'r' && x.error ? ' (' + esc(x.error) + ')' : '') + '</div>';
-    el.innerHTML = '<h4 style="margin:10px 0 4px">Dihapus dari antrean kasir (' + r.rejects.length + ')</h4>' + (r.rejects.map(x => row(x, 'r')).join('') || '<p class="muted">Tidak ada.</p>') +
-      '<h4 style="margin:10px 0 4px">Transaksi dibatalkan (' + r.voids.length + ')</h4>' + (r.voids.map(x => row(x, 'v')).join('') || '<p class="muted">Tidak ada.</p>');
-  } catch (e) { el.innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }
+    '<div class="li" style="display:block"><b>Kesesuaian stok</b><p class="muted">Membandingkan stok setiap item dengan jumlah riwayat mutasinya di server. Selisih berarti ada perubahan stok di luar aplikasi (misalnya diedit langsung di Google Sheets).</p><button class="btn sec" data-act="caudit" style="margin-top:0">Periksa stok sekarang</button><div id="caud"></div></div>';
 }
 async function stockAudit() {
   const el = $('#caud'); el.innerHTML = skel(2);
@@ -374,7 +365,7 @@ Object.assign(ACT, {
   arsipsave: () => busy('Menyimpan…', async () => { try { await api('setting.setMany', {values: {arsip_bulan: Number($('#ar_b').value)}}); await A.loadData(); toast('Batas arsip disimpan'); vArsip(); } catch (e) { toast(e.message); } }),
   arsiprun: () => { if (!confirm('Pindahkan data lama ke spreadsheet arsip sekarang? Data tetap tersimpan di arsip.')) return; return busy('Mengarsipkan data lama… (bisa beberapa menit)', async () => { try { const r = await api('archive.run', {}); const n = Object.keys(r.tabel).reduce((a, k) => a + r.tabel[k], 0); toast(n + ' baris dipindahkan' + (r.sebagian ? ' (sebagian; jalankan lagi untuk melanjutkan)' : '')); vArsip(); } catch (e) { toast(e.message); } }); },
   skuauto: () => busy('Mengisi SKU…', async () => { try { const r = await api('sku.auto', {}); await A.loadData(); A.render(); toast(r.diisi + ' SKU diisi otomatis'); } catch (e) { toast(e.message); } }),
-  caudit: stockAudit, crej: rejList, cekgo: el => { const t = el.dataset.t; if (t === 'resep' || t === 'stok') S.tab = t; else { S.mt = t; S.tab = 'master'; } A.render(); },
+  caudit: stockAudit, cekgo: el => { const t = el.dataset.t; if (t === 'resep' || t === 'stok') S.tab = t; else { S.mt = t; S.tab = 'master'; } A.render(); },
   srec: el => busy('Memproses…', async () => { try { await api('sale.recover', {id: el.dataset.id, aksi: el.dataset.a}); await A.loadData(); toast(el.dataset.a === 'selesai' ? 'Transaksi diselesaikan' : 'Transaksi dibatalkan'); stockAudit(); } catch (e) { toast(e.message); } }),
   creco: el => busy('Menyelaraskan riwayat…', async () => { try { await api('stock.reconcile', {tipe: el.dataset.t, id: el.dataset.id}); toast('Riwayat disesuaikan'); stockAudit(); } catch (e) { toast(e.message); } }),
   dp: el => { S.dp = el.dataset.p; vDash(); },
