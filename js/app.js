@@ -72,6 +72,9 @@ function closeSheet() { if (S.opin) { const r = S.opin.res; S.opin = null; r(nul
 
 /* ---------- API dan sinkronisasi ---------- */
 let pending = 0;
+const QUIET = {ping: 1, 'stock.get': 1, bootstrap: 1, login: 1, logout: 1}; // aksi yang tidak memicu pemeriksaan versi (mereka sendiri yang menyinkronkan)
+let staleT = null, seenV = ''; // seenV: versi terbaru yang pernah terlihat di jawaban server
+function staleSoon() { if (staleT) return; staleT = setTimeout(() => { staleT = null; if (S.data && dverKey() !== seenV) checkUpdates(true); }, 400); } // bila saat timer berjalan data sudah sama dengan versi terakhir yang terlihat, tak perlu ping
 function netState() { document.body.classList.toggle('net', pending > 0); badge(); }
 async function api(action, payload, opt) {
   if (!C.API_URL || C.API_URL.indexOf('http') !== 0) throw new Error('API_URL belum diisi di js/config.js');
@@ -82,6 +85,8 @@ async function api(action, payload, opt) {
     if (!j.ok) { const e = new Error(j.error); e.server = true; e.retry = !!j.retry; e.auth = /^Sesi/.test(j.error); throw e; } // retry: galat sementara di server (kunci penuh, kuota), aman diulang
     if (S.data) { if (j.cat_ver && j.cat_prev && S.data.cat_ver === j.cat_prev) S.data.cat_ver = j.cat_ver; if (j.stock_ver && j.stock_prev && S.data.stock_ver === j.stock_prev) S.data.stock_ver = j.stock_ver; }
     if (j.ver && S.data && j.ver_prev && S.data.ver === j.ver_prev) S.data.ver = j.ver; // perubahan ini dibuat perangkat ini sendiri: tidak perlu muat ulang
+    if (j.cat_ver) seenV = j.cat_ver + '~' + j.stock_ver;
+    if (S.data && S.token && j.cat_ver && !QUIET[action] && (S.data.cat_ver !== j.cat_ver || S.data.stock_ver !== j.stock_ver)) staleSoon(); // jawaban server memuat versi yang belum kita kenal = ada perubahan dari perangkat lain: periksa sekali, tanpa polling
     return j.data;
   } finally { if (!silent) { pending--; netState(); } }
 }
@@ -96,24 +101,47 @@ const skel = n => Array.from({length: n || 3}, () => '<div class="sk"></div>').j
 function applyQueueStock() {
   S.queue.forEach(q => { if (q.status === 'pending') q.payload.items.forEach(it => { const v = vById(it.variant_id); if (v) v.stok = (Number(v.stok) || 0) - it.qty; }); });
 }
-async function loadData() { S.data = await api('bootstrap'); applyQueueStock(); S.lastSync = Date.now(); LS.set('lastsync', S.lastSync); LS.set('data', S.data); if (S.cat !== 'Semua' && !S.data.products.some(p => p.kategori === S.cat)) S.cat = 'Semua'; setTimeout(fotoWarm, 1500); }
+async function loadData() { S.data = await api('bootstrap'); applyQueueStock(); S.lastSync = lastChk = Date.now(); // muat penuh = sekaligus pemeriksaan versi, ping berikutnya tidak perlu segera
+  LS.set('lastsync', S.lastSync); LS.set('data', S.data); if (S.cat !== 'Semua' && !S.data.products.some(p => p.kategori === S.cat)) S.cat = 'Semua'; setTimeout(fotoWarm, 1500); }
 async function refreshStock() { // menyegarkan stok produk jadi dari server; false bila server belum mengenal stock.get (klien memuat penuh)
   let r; try { r = await api('stock.get', {}, {silent: true}); } catch (e) { if (e.server && /Aksi tidak dikenal/.test(e.message)) return false; throw e; }
   S.data.variants.forEach(v => { if (r.stok[v.id] !== undefined) v.stok = r.stok[v.id]; });
-  applyQueueStock(); S.data.stock_ver = r.stock_ver; S.data.ver = r.ver; S.lastSync = Date.now(); LS.set('lastsync', S.lastSync); LS.set('data', S.data); return true;
+  applyQueueStock(); S.data.stock_ver = r.stock_ver; S.data.ver = r.ver; S.lastSync = lastChk = Date.now(); LS.set('lastsync', S.lastSync); LS.set('data', S.data); return true;
 }
-/* Sinkronisasi hanya bila perlu: cek versi data (ping senyap, tanpa animasi); muat ulang penuh hanya jika versi berubah. Tanpa polling berkala. */
-let lastChk = 0;
-async function checkUpdates(force) {
-  if (!S.token || !S.data || (!force && Date.now() - lastChk < 30000)) return;
+/* Sinkronisasi hanya bila perlu: ping senyap (hanya membaca versi di cache server, murah) lalu memuat ulang HANYA bagian yang berubah: katalog penuh bila cat_ver
+   berubah, peta stok kecil bila hanya stock_ver (penjualan perangkat lain). Tanpa polling berkala; pemeriksaan terjadi saat aplikasi dibuka/kembali ke depan, saat online,
+   saat membuka Beranda/Riwayat, dan bila jawaban server apa pun memuat versi yang belum dikenal. Permintaan serentak digabung menjadi satu ping.
+   verSync -> 'cat' | 'stock' (ada yang dimuat ulang) | '' (sudah terbaru) | null (server tidak terjangkau). */
+let lastChk = 0, chkP = null;
+function verSync(maxAge) {
+  if (!S.token || !S.data) return Promise.resolve('');
+  if (chkP) return chkP;
+  if (maxAge > 0 && Date.now() - lastChk < maxAge) return Promise.resolve('');
   lastChk = Date.now();
-  try {
-    const p = await api('ping', {}, {silent: true}), redraw = () => { if ($('#sheet').hidden && !S.dirty) render(); else S.deferRender = true; };
-    if (p.cat_ver !== undefined) { // server baru: katalog dimuat penuh hanya bila katalognya berubah; bila hanya stok (penjualan perangkat lain) cukup peta stok kecil
-      if (p.cat_ver !== S.data.cat_ver) { await loadData(); redraw(); toast('Data terbaru dimuat'); }
-      else if (p.stock_ver !== S.data.stock_ver) { if (await refreshStock()) redraw(); else { await loadData(); redraw(); } }
-    } else if (p.ver !== S.data.ver) { await loadData(); redraw(); toast('Data terbaru dimuat'); }
-  } catch (e) { if (e.auth) softLogout(); }
+  return chkP = (async () => {
+    try {
+      const p = await api('ping', {}, {silent: true});
+      if (p.cat_ver !== undefined) { // server baru
+        if (p.cat_ver !== S.data.cat_ver) { await loadData(); return 'cat'; }
+        if (p.stock_ver !== S.data.stock_ver) { if (await refreshStock()) return 'stock'; await loadData(); return 'cat'; }
+      } else if (p.ver !== S.data.ver) { await loadData(); return 'cat'; }
+      return '';
+    } catch (e) { if (e.auth) { softLogout(); return ''; } return e.server ? '' : null; }
+  })().finally(() => { chkP = null; });
+}
+const dverKey = () => S.data ? (S.data.cat_ver !== undefined ? S.data.cat_ver + '~' + S.data.stock_ver : String(S.data.ver)) : ''; // sidik versi data yang dipegang perangkat ini
+function redrawFor(kind) { // tampilkan hasil sinkronisasi; perubahan stok saja cukup menggambar ulang daftar (tanpa menutup pencarian atau menggulung ulang layar)
+  if (!$('#sheet').hidden || S.dirty) { S.deferRender = true; return; }
+  if (kind === 'stock') {
+    if (S.tab === 'kasir' && $('#grid')) { grid(); syncCart(); return; }
+    if (S.tab === 'stok' && $('#sq')) { if (!(S.stab === 'bahan' && own())) stokList(); return; }
+  }
+  render();
+}
+async function checkUpdates(force) {
+  const r = await verSync(force ? 0 : 30000); if (!r) return;
+  if (r === 'cat') toast('Data terbaru dimuat');
+  redrawFor(r);
 }
 let flushing = false, flushDelay = 15000, flushTimer = null;
 const mineAll = () => S.data ? S.queue.filter(q => q.uid === S.data.user.uid || q.by === S.data.user.uid) : []; // milik user ini, atau diambil alih Owner
@@ -151,8 +179,8 @@ async function flush() {
     }
   } finally { flushing = false; S.queue.forEach(q => { if (q.state === 'sending') q.state = 'waiting'; }); LS.set('queue', S.queue); LS.set('data', S.data); badge(); if (S.tab === 'riwayat' && $('#sheet').hidden) vRiwayat(); scheduleFlush(); }
 }
-function softLogout(msg) { S.token = null; LS.del('token'); renderLogin(msg || 'Sesi berakhir, silakan masuk lagi.'); }
-function logout() { if (S.token && C.API_URL && C.API_URL.indexOf('http') === 0) { try { fetch(C.API_URL, {method: 'POST', keepalive: true, headers: {'Content-Type': 'text/plain;charset=utf-8'}, body: JSON.stringify({action: 'logout', token: S.token, payload: {}})}).catch(() => {}); } catch (e) {} } S.token = null; S.data = null; S.cart = []; LS.del('token'); LS.del('data'); LS.del('cart'); renderLogin(); }
+function softLogout(msg) { S.rhist = null; S.token = null; LS.del('token'); renderLogin(msg || 'Sesi berakhir, silakan masuk lagi.'); }
+function logout() { if (S.token && C.API_URL && C.API_URL.indexOf('http') === 0) { try { fetch(C.API_URL, {method: 'POST', keepalive: true, headers: {'Content-Type': 'text/plain;charset=utf-8'}, body: JSON.stringify({action: 'logout', token: S.token, payload: {}})}).catch(() => {}); } catch (e) {} } S.rhist = null; S.token = null; S.data = null; S.cart = []; LS.del('token'); LS.del('data'); LS.del('cart'); renderLogin(); }
 
 /* ---------- Ikon, tampilan, diagnostik, struk ---------- */
 const cfg = k => (S.data && S.data.settings[k]);
@@ -867,14 +895,23 @@ async function vRiwayat() {
     (q.status === 'review' ? '<div class="muted" style="color:var(--err)">' + esc(q.error) + '</div>' : '') + '</div><div class="r"><span class="tag ' + (q.status === 'review' ? 'red' : '') + '">' + (q.status === 'review' ? 'Perlu ditinjau' : 'Menunggu kirim') + '</span>' +
     (q.status === 'review' ? '<div><button class="chip" data-act="qretry" data-i="' + i + '">Coba lagi</button> <button class="chip" data-act="qdel" data-i="' + i + '">Hapus</button></div>' : '') + '</div></div>').join('');
   $('#rq').innerHTML = qs;
-  try {
-    const rows = await api('sales.list', {tanggal: day}); if (S.tab !== 'riwayat' || !$('#rlist')) return;
+  const uid = S.data.user.uid, hist = S.rhist && S.rhist.uid === uid ? S.rhist : (S.rhist = {uid: uid, d: {}}), ent = hist.d[day];
+  const paint = e => {
+    if (S.tab !== 'riwayat' || !$('#rlist') || !$('#rsum')) return; const rows = e.rows;
     const done = rows.filter(r => r.status === 'selesai'), nTrx = done.filter(r => !r.ref_sale_id).length, omzet = done.reduce((a, r) => a + Number(r.total), 0), avg = nTrx ? omzet / nTrx : 0; // retur (nilai minus) mengurangi omzet tetapi tidak dihitung sebagai transaksi
-    $('#rsum').innerHTML = '<div class="kgrid"><div class="kpi"><div class="muted">Omzet</div><b>' + rp(omzet) + '</b></div><div class="kpi"><div class="muted">Transaksi</div><b>' + nTrx + '</b></div><div class="kpi wide"><div class="muted">Rata-rata per transaksi</div><b>' + rp(avg) + '</b></div>' + (own() ? '<div class="kpi wide"><div class="muted">Produk terlaris</div><b id="rtop">' + (done.length ? 'Memuat…' : '-') + '</b></div>' : '') + '</div>';
-    if (own() && done.length) api('report.get', {type: 'penjualan', from: day, to: day}, {silent: true}).then(r => { const el = $('#rtop'); if (!el) return; const best = r.rows.slice().sort((a, b) => b[2] - a[2])[0]; el.innerHTML = best ? esc((best[0] + ' ' + best[1]).trim()) + ' <small class="muted">' + qf(best[2]) + ' terjual</small>' : '-'; }).catch(() => { const el = $('#rtop'); if (el) el.textContent = '-'; });
+    $('#rsum').innerHTML = '<div class="kgrid"><div class="kpi"><div class="muted">Omzet</div><b>' + rp(omzet) + '</b></div><div class="kpi"><div class="muted">Transaksi</div><b>' + nTrx + '</b></div><div class="kpi wide"><div class="muted">Rata-rata per transaksi</div><b>' + rp(avg) + '</b></div>' + (own() ? '<div class="kpi wide"><div class="muted">Produk terlaris</div><b id="rtop">' + (done.length ? (e.top || 'Memuat…') : '-') + '</b></div>' : '') + '</div>';
+    if (own() && done.length && !e.top) api('report.get', {type: 'penjualan', from: day, to: day}, {silent: true}).then(r => { const best = r.rows.slice().sort((a, b) => b[2] - a[2])[0]; e.top = best ? esc((best[0] + ' ' + best[1]).trim()) + ' <small class="muted">' + qf(best[2]) + ' terjual</small>' : '-'; const el = $('#rtop'); if (el && S.tab === 'riwayat') el.innerHTML = e.top; }).catch(() => { const el = $('#rtop'); if (el && !e.top) el.textContent = '-'; });
     $('#rlist').innerHTML = rows.map(r => '<div class="li"><div><b>' + esc(r.nomor) + '</b>' + (r.ref_sale_id ? ' <span class="tag red">Retur</span>' : '') + '<div class="muted">' + esc(String(r.tanggal).slice(11, 16)) + ' · ' + esc(chName(r.channel_id)) + ' · ' + esc(r.metode_bayar) + '</div></div><div class="r"><b>' + rp(r.total) + '</b>' + (r.status === 'selesai' && !r.ref_sale_id ? '<div><button class="chip" data-act="retur" data-id="' + esc(r.id) + '">Retur</button></div>' : '') + '</div></div>').join('') ||
       emptyState('riwayat', 'Belum ada transaksi', 'Tidak ada transaksi pada ' + esc(idDate(day)) + '.', '<button class="btn pri" data-act="tab" data-t="kasir">Mulai transaksi</button>');
-  } catch (e) { if ($('#rlist')) $('#rlist').innerHTML = '<p class="muted">Tidak bisa memuat riwayat dari server (' + esc(e.message) + ').</p>'; }
+  };
+  try {
+    if (ent) paint(ent); // tampil seketika dari hasil terakhir; diperbarui hanya bila ada data baru
+    if (ent && navigator.onLine === false) return;
+    await verSync(15000); if (S.tab !== 'riwayat' || !$('#rlist')) return; // cek versi murah dulu; muat daftar penuh hanya bila versi berubah
+    const k = dverKey(); if (ent && ent.k === k) return;
+    const rows = await api('sales.list', {tanggal: day}); if (S.tab !== 'riwayat' || !$('#rlist')) return;
+    const ne = {k: k, rows: rows}; hist.d[day] = ne; Object.keys(hist.d).slice(0, -8).forEach(x => delete hist.d[x]); paint(ne); // maks. 8 hari disimpan di memori
+  } catch (e) { if ($('#rlist') && !ent) $('#rlist').innerHTML = '<p class="muted">Tidak bisa memuat riwayat dari server (' + esc(e.message) + ').</p>'; }
 }
 
 /* ---------- Stok dan pembelian ---------- */
@@ -952,7 +989,7 @@ function vMenu() {
     (o ? '<div class="grp"><h3>Operasional</h3>' + mi('go_riwayat', 'riwayat', 'Riwayat penjualan', 'Transaksi per tanggal') + mi('go_laporan', 'laporan', 'Laporan', 'Laba rugi, penjualan, HPP, stok') + mi('go_tutup', 'riwayat', 'Tutup kasir', 'Rekap shift dan hitung uang laci') + mi('go_cek', 'cek', 'Pemeriksaan data', nIssue ? nIssue + ' hal perlu diperbaiki' : 'Kelengkapan data dan kesesuaian stok', '', nIssue) + '</div>' +
       '<div class="grp"><h3>Data</h3>' + mi('go_master', 'master', 'Data Master', 'Produk, varian, harga, bahan, resep, biaya') + mi('go_shopee', 'shopee', 'Impor pesanan Shopee', 'Dari file CSV') + mi('go_users', 'users', 'Pengguna', 'Owner dan kasir') + mi('go_settings', 'settings', 'Pengaturan', 'Usaha, PPN, stok, printer, HPP') + mi('go_arsip', 'master', 'Arsip data', 'Rapikan data lama agar tetap cepat') + '</div>' : '') +
     (o ? '' : '<div class="grp"><h3>Kasir</h3>' + mi('go_tutup', 'riwayat', 'Tutup kasir', 'Rekap shift dan hitung uang laci') + '</div>') +
-    '<div class="grp"><h3>Sistem</h3>' + mi('sync', 'sync', 'Perbarui data', 'Muat ulang dan kirim antrean') + mi('go_diag', 'diag', 'Diagnostik dan uji cetak', 'Cek koneksi, WhatsApp, dan printer') + '</div>' +
+    '<div class="grp"><h3>Sistem</h3>' + mi('sync', 'sync', 'Perbarui data', own() ? 'Muat ulang semua dari spreadsheet dan kirim antrean' : 'Cek data baru dan kirim antrean') + mi('go_diag', 'diag', 'Diagnostik dan uji cetak', 'Cek koneksi, WhatsApp, dan printer') + '</div>' +
     '<div class="grp grp-out">' + mi('logout', 'out', 'Keluar', 'Keluar dari akun ini', 'danger') + '</div>';
 }
 function vDiag() {
@@ -1227,7 +1264,10 @@ const ACT = {
   go_master: () => { S.tab = 'master'; render(); }, go_riwayat: () => { S.tab = 'riwayat'; render(); }, go_laporan: () => { S.tab = 'laporan'; render(); }, go_shopee: () => { S.tab = 'shopee'; render(); }, go_resep: () => { S.tab = 'resep'; render(); }, go_cek: () => { S.tab = 'cek'; render(); }, go_users: () => { S.tab = 'users'; render(); }, go_settings: () => { S.tab = 'settings'; render(); },
   mt: el => { S.mt = el.dataset.k; vMaster(); }, medit: el => meditSheet(el.dataset.id), msave: el => mSave(el.dataset.id), mdel: el => mDel(el.dataset.id),
   uedit: el => ueditSheet(el.dataset.id), usave: el => uSave(el.dataset.id), ssave: sSave,
-  sync: () => busy('Memperbarui data…', async () => { try { if (own()) await api('sistem.refresh', {}); await loadData(); lastChk = Date.now(); render(); await flush(); toast('Data diperbarui'); } catch (e) { if (e.auth) softLogout(); else toast('Gagal memperbarui: ' + e.message); } })
+  sync: () => busy('Memperbarui data…', async () => { try {
+    if (own()) { await api('sistem.refresh', {}); await loadData(); lastChk = Date.now(); render(); await flush(); toast('Data diperbarui'); } // Owner: muat ulang penuh dan bersihkan cache server (setelah mengedit spreadsheet langsung)
+    else { const r = await verSync(0); if (r === null) throw new Error('Tidak ada koneksi ke server'); if (r) redrawFor(r); await flush(); toast(r ? 'Data diperbarui' : 'Sudah yang terbaru'); } // Kasir: hanya memuat bila ada data baru
+  } catch (e) { if (e.auth) softLogout(); else toast('Gagal memperbarui: ' + e.message); } })
 };
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]'), a = el && el.dataset.act; if (!el || !ACT[a]) return;
@@ -1278,5 +1318,5 @@ if (window.MutationObserver) new MutationObserver(() => { cancelAnimationFrame(S
 if (window.matchMedia) { const mq = matchMedia('(min-width: 900px)'); (mq.addEventListener ? mq.addEventListener.bind(mq, 'change') : mq.addListener.bind(mq))(() => { if (S.token && S.data && $('#sheet').hidden && !S.dirty) render(); }); }
 Object.assign(APP.views, {tutup: vTutup, kasir: vKasir, riwayat: vRiwayat, stok: vStok, menu: vMenu, master: vMaster, users: vUsers, settings: vSettings, diag: vDiag});
 Object.assign(APP, {S: S, api: api, $: $, rp: rp, num: num, esc: esc, LS: LS, T: T, sheet: sheet, closeSheet: closeSheet, toast: toast, busy: busy, busyLabel: busyLabel, skel: skel, ACT: ACT,
-  render: render, loadData: loadData, patchRecipe: patchRecipe, patchMaster: patchMaster, checkUpdates: checkUpdates, dnum: dnum, qf: qf, r6: r6, flush: flush, Store: Store, isWide: isWide, skuLevel: skuLevel, wrapChips: wrapChips, isAddon: isAddon, emptyState: emptyState, idDate: idDate, idRange: idRange, addDays: addDays, lvText: lvText, vById: vById, pById: pById, vName: vName, vSub: vSub, chName: chName, fmtDT: fmtDT, today: today, own: own, start: start});
+  render: render, loadData: loadData, patchRecipe: patchRecipe, patchMaster: patchMaster, checkUpdates: checkUpdates, verSync: verSync, dverKey: dverKey, dnum: dnum, qf: qf, r6: r6, flush: flush, Store: Store, isWide: isWide, skuLevel: skuLevel, wrapChips: wrapChips, isAddon: isAddon, emptyState: emptyState, idDate: idDate, idRange: idRange, addDays: addDays, lvText: lvText, vById: vById, pById: pById, vName: vName, vSub: vSub, chName: chName, fmtDT: fmtDT, today: today, own: own, start: start});
 })();

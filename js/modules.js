@@ -24,12 +24,19 @@ const warnBanner = v => '<div class="warn-b" role="alert"><div><b>Laba belum aku
 const qMark = '<span class="q-m" title="HPP belum diisi, margin belum bisa dihitung" aria-label="margin belum bisa dihitung">?</span>';
 
 /* ---------- Beranda (dashboard) ---------- */
-function vDash() {
+function vDash(force) { // force: tombol muat ulang (↻) memaksa ambil ulang dari server
   $('#main').innerHTML = wrapChips([['hari', 'Hari ini'], ['minggu', '7 hari'], ['bulan', 'Bulan ini']].map(p => '<button class="chip ' + (S.dp === p[0] ? 'on' : '') + '" data-act="dp" data-p="' + p[0] + '">' + p[1] + '</button>').join('') + '<button class="chip" data-act="dp" data-p="' + S.dp + '" aria-label="Muat ulang">↻</button>') + '<div id="dbody"></div>';
-  const key = 'dash_' + S.dp, cached = LS.get(key, null), want = S.dp;
+  /* Hasil disimpan bersama sidik versi data + tanggal ({k, d}). Layar langsung menampilkan hasil tersimpan; laporan penuh diambil hanya bila versi data berubah
+     (ada penjualan/biaya/produksi baru), hari berganti, atau ↻ ditekan. Sidik diambil SEBELUM permintaan: bila data bergerak di sela, hasilnya tampak sedikit basi
+     dan diambil ulang di kunjungan berikutnya (arah aman). Format lama (tanpa {k, d}) tetap ditampilkan lalu diperbarui. */
+  const key = 'dash_' + S.dp, c = LS.get(key, null), want = S.dp, cached = c && c.k !== undefined ? c.d : c;
   if (cached) drawDash(cached); else $('#dbody').innerHTML = skel(4);
-  api('dashboard.get', {period: want}).then(d => { LS.set(key, d); if (S.tab === 'dash' && S.dp === want && $('#dbody')) drawDash(d); })
-    .catch(e => { if (!cached && $('#dbody')) $('#dbody').innerHTML = '<p class="muted">Tidak bisa memuat dashboard: ' + esc(e.message) + '</p>'; });
+  if (!force && cached && navigator.onLine === false) return;
+  A.verSync(force ? 0 : 15000).then(() => {
+    if (S.tab !== 'dash' || S.dp !== want || !$('#dbody')) return;
+    const k = A.dverKey() + '|' + A.today(); if (!force && c && c.k === k) return;
+    return api('dashboard.get', {period: want}).then(d => { LS.set(key, {k: k, d: d}); if (S.tab === 'dash' && S.dp === want && $('#dbody')) drawDash(d); });
+  }).catch(e => { if (!cached && $('#dbody')) $('#dbody').innerHTML = '<p class="muted">Tidak bisa memuat dashboard: ' + esc(e.message) + '</p>'; });
 }
 function delta(c, p, lab) { if (!p) return '<span>—</span> ' + lab + ' (belum ada data)'; const x = (c - p) / Math.abs(p) * 100; return '<span style="color:' + (x >= 0 ? 'var(--ok)' : 'var(--err)') + ';font-weight:800">' + (x >= 0 ? '▲ ' : '▼ ') + pct(Math.abs(x)) + '</span> ' + lab; }
 const kpi = (l, v, sub) => '<div class="kpi"><div class="muted">' + l + '</div><b>' + v + '</b><div class="muted">' + sub + '</div></div>';
@@ -371,7 +378,7 @@ Object.assign(ACT, {
   caudit: stockAudit, cekgo: el => { const t = el.dataset.t; if (t === 'resep' || t === 'stok') S.tab = t; else { S.mt = t; S.tab = 'master'; } A.render(); },
   srec: el => busy('Memproses…', async () => { try { await api('sale.recover', {id: el.dataset.id, aksi: el.dataset.a}); await A.loadData(); toast(el.dataset.a === 'selesai' ? 'Transaksi diselesaikan' : 'Transaksi dibatalkan'); stockAudit(); } catch (e) { toast(e.message); } }),
   creco: el => busy('Menyelaraskan riwayat…', async () => { try { await api('stock.reconcile', {tipe: el.dataset.t, id: el.dataset.id}); toast('Riwayat disesuaikan'); stockAudit(); } catch (e) { toast(e.message); } }),
-  dp: el => { S.dp = el.dataset.p; vDash(); },
+  dp: el => { const again = el.dataset.p === S.dp; S.dp = el.dataset.p; vDash(again); },
   bar: el => { const s = (S.dser || [])[Number(el.dataset.i)], bt = $('#bt'); if (!s || !bt) return; bt.innerHTML = '<b>' + esc(idDate(s.d)) + '</b> · Omzet <b>' + rp(s.omzet) + '</b> · Laba kotor <b>' + rp(s.laba) + '</b>'; document.querySelectorAll('.bchart [data-b]').forEach(r => { r.style.opacity = r.dataset.b === el.dataset.i ? 1 : .35; }); },
   rpre: el => { S.rpre = el.dataset.p; if (S.rpre !== 'custom') setPreset(); vLaporan(S.rpre === 'custom'); },
   pnew: prodNew, pjenis: el => { S.pform.jenis = el.dataset.j; prodNew(); },
