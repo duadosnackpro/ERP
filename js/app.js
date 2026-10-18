@@ -138,6 +138,25 @@ function redrawFor(kind) { // tampilkan hasil sinkronisasi; perubahan stok saja 
   }
   render();
 }
+/* Membaca data layar (Produksi, Pengguna, Tutup kasir, Laporan, Arsip, Biaya, ...) dengan cache berbasis versi: hasil disimpan bersama sidik versi data + tanggal.
+   Bila versi tidak berubah sejak hasil itu diambil, layar langsung diisi dari cache dan TIDAK ada permintaan ke server (selain satu ping murah bila pemeriksaan terakhir
+   lebih dari 15 detik). Hasil cache baru ditampilkan setelah versinya terbukti masih berlaku (kecuali offline), jadi layar tidak pernah menampilkan data basi.
+   paint(data, dariCache); opt: {force, silent, fail(err)}. Sidik diambil sebelum permintaan: bila data bergerak di sela, hasil tampak sedikit basi dan diambil ulang lain kali. */
+let VC = {};
+async function vload(action, payload, paint, opt) {
+  opt = opt || {}; if (!S.data) return;
+  const key = S.data.user.uid + '|' + action + '|' + JSON.stringify(payload || {}), ent = VC[key], off = navigator.onLine === false; let shown = false;
+  if (ent && !opt.force && (off || ent.k === dverKey() + '|' + today())) { paint(ent.v, true); shown = true; }
+  if (off) { if (!shown && opt.fail) opt.fail(new Error('Tidak ada koneksi ke server')); return; }
+  try {
+    await verSync(opt.force ? 0 : 15000); if (!S.data) return;
+    const k = dverKey() + '|' + today();
+    if (ent && !opt.force && ent.k === k) { if (!shown) paint(ent.v, true); return; }
+    const v = await api(action, payload, opt.silent ? {silent: true} : undefined);
+    VC[key] = {k: k, v: v}; const ks = Object.keys(VC); if (ks.length > 40) delete VC[ks[0]];
+    paint(v, false);
+  } catch (e) { if (e.auth) { softLogout(); return; } if (opt.fail && !shown) opt.fail(e); }
+}
 async function checkUpdates(force) {
   const r = await verSync(force ? 0 : 30000); if (!r) return;
   if (r === 'cat') toast('Data terbaru dimuat');
@@ -179,8 +198,8 @@ async function flush() {
     }
   } finally { flushing = false; S.queue.forEach(q => { if (q.state === 'sending') q.state = 'waiting'; }); LS.set('queue', S.queue); LS.set('data', S.data); badge(); if (S.tab === 'riwayat' && $('#sheet').hidden) vRiwayat(); scheduleFlush(); }
 }
-function softLogout(msg) { S.rhist = null; S.token = null; LS.del('token'); renderLogin(msg || 'Sesi berakhir, silakan masuk lagi.'); }
-function logout() { if (S.token && C.API_URL && C.API_URL.indexOf('http') === 0) { try { fetch(C.API_URL, {method: 'POST', keepalive: true, headers: {'Content-Type': 'text/plain;charset=utf-8'}, body: JSON.stringify({action: 'logout', token: S.token, payload: {}})}).catch(() => {}); } catch (e) {} } S.rhist = null; S.token = null; S.data = null; S.cart = []; LS.del('token'); LS.del('data'); LS.del('cart'); renderLogin(); }
+function softLogout(msg) { S.rhist = null; VC = {}; S.token = null; LS.del('token'); renderLogin(msg || 'Sesi berakhir, silakan masuk lagi.'); }
+function logout() { if (S.token && C.API_URL && C.API_URL.indexOf('http') === 0) { try { fetch(C.API_URL, {method: 'POST', keepalive: true, headers: {'Content-Type': 'text/plain;charset=utf-8'}, body: JSON.stringify({action: 'logout', token: S.token, payload: {}})}).catch(() => {}); } catch (e) {} } S.rhist = null; VC = {}; S.token = null; S.data = null; S.cart = []; LS.del('token'); LS.del('data'); LS.del('cart'); renderLogin(); }
 
 /* ---------- Ikon, tampilan, diagnostik, struk ---------- */
 const cfg = k => (S.data && S.data.settings[k]);
@@ -1027,14 +1046,14 @@ function field(f, val) {
     (sug ? '<datalist id="dl_' + k + '">' + sug.map(x => '<option value="' + esc(x) + '">').join('') + '</datalist>' : '') + '</label>';
 }
 function readForm() { const o = {}; document.querySelectorAll('#sheet [data-f]').forEach(e => o[e.dataset.f] = e.type === 'checkbox' ? e.checked : e.value); return o; }
-function vMaster() {
+function vMaster(noLoad) {
   const cfg = MT[S.mt], rows = S.mt === 'expenses' ? (S.exp || []) : (S.data[cfg.k] || []);
   $('#main').innerHTML = '<button class="chip" data-act="tab" data-t="menu">← Menu</button><div class="chips" style="margin-top:8px">' + Object.keys(MT).map(k => '<button class="chip ' + (k === S.mt ? 'on' : '') + '" data-act="mt" data-k="' + k + '">' + MT[k].l + '</button>').join('') + '<button class="chip" data-act="go_resep">Resep</button></div>' +
     '<button class="btn pri" data-act="medit" data-id="">+ Tambah ' + cfg.l.toLowerCase() + '</button><div style="height:8px"></div>' +
     rows.map(r => '<button class="li" style="width:100%;border:0;font:inherit;text-align:left" data-act="medit" data-id="' + esc(r.id) + '"><span>' + esc(cfg.t(r)) + '</span><span class="muted">Ubah</span></button>').join('') + (S.mt === 'expenses' && !S.expLoaded ? skel(3) : '');
-  if (S.mt === 'expenses' && !S.expLoaded) loadExp();
+  if (S.mt === 'expenses' && !noLoad) loadExp();
 }
-async function loadExp() { try { S.exp = await api('master.list', {table: 'expenses'}); S.expLoaded = true; if (S.tab === 'master') vMaster(); } catch (e) { toast(e.message); } }
+async function loadExp() { await vload('master.list', {table: 'expenses'}, r => { S.exp = r; S.expLoaded = true; if (S.tab === 'master' && S.mt === 'expenses') vMaster(true); }, {fail: e => toast(e.message)}); }
 function meditSheet(id) {
   const cfg = MT[S.mt], r = id ? (S.mt === 'expenses' ? S.exp : S.data[cfg.k]).find(x => x.id === id) : {tanggal: today()};
   S.fotoFor = S.mt === 'products' ? id : null;
@@ -1070,8 +1089,8 @@ async function mDel(id) {
 }
 async function vUsers() {
   $('#main').innerHTML = '<button class="chip" data-act="tab" data-t="menu">← Menu</button><button class="btn pri" data-act="uedit" data-id="">+ Tambah pengguna</button><div id="ul">' + skel(3) + '</div>';
-  try { S.users = await api('user.list'); if (!$('#ul')) return; $('#ul').innerHTML = S.users.map(u => '<button class="li" style="width:100%;border:0;font:inherit;text-align:left;margin-top:8px" data-act="uedit" data-id="' + esc(u.id) + '"><span><b>' + esc(u.nama) + '</b> <span class="muted">@' + esc(u.username) + ' · ' + esc(u.role) + '</span></span>' + (String(u.aktif) === 'false' ? '<span class="tag red">Nonaktif</span>' : '') + (u.terkunci ? '<span class="tag red">Terkunci</span>' : '') + '</button>').join(''); }
-  catch (e) { if ($('#ul')) $('#ul').innerHTML = '<p class="muted">' + esc(e.message) + '</p>'; }
+  await vload('user.list', undefined, users => { S.users = users; if (!$('#ul')) return; $('#ul').innerHTML = S.users.map(u => '<button class="li" style="width:100%;border:0;font:inherit;text-align:left;margin-top:8px" data-act="uedit" data-id="' + esc(u.id) + '"><span><b>' + esc(u.nama) + '</b> <span class="muted">@' + esc(u.username) + ' · ' + esc(u.role) + '</span></span>' + (String(u.aktif) === 'false' ? '<span class="tag red">Nonaktif</span>' : '') + (u.terkunci ? '<span class="tag red">Terkunci</span>' : '') + '</button>').join(''); },
+    {fail: e => { if ($('#ul')) $('#ul').innerHTML = '<p class="muted">' + esc(e.message) + '</p>'; }});
 }
 function ueditSheet(id) {
   const u = id ? S.users.find(x => x.id === id) : {role: 'kasir', aktif: true};
@@ -1154,16 +1173,16 @@ async function vTutup() {
   $('#main').innerHTML = back + '<div class="li" style="display:block;margin-top:8px"><b>Tutup kasir</b><p class="muted">Hitung uang tunai di laci lebih dulu, isi jumlahnya, lalu tutup. Rekap penjualan baru tampil setelah penutupan (hitung buta) agar selisihnya jujur.</p></div><div id="tbody">' + skel(3) + '</div>';
   const unsent = mineAll().length;
   if (unsent) { flush(); $('#tbody').innerHTML = '<div class="notice"><span>Masih ada ' + unsent + ' transaksi yang belum terkirim ke server. Kirim dulu agar rekap lengkap.</span><button class="chip" data-act="tab" data-t="tutup">Periksa lagi</button></div><button class="btn pri" data-act="qnow">Kirim sekarang</button>'; return; }
-  try {
-    const r = await api('shift.summary', {}); if (S.tab !== 'tutup' || !$('#tbody')) return; S.shift = r; const kv = (a, b) => '<div class="kv"><span>' + a + '</span><span>' + b + '</span></div>';
+  await vload('shift.summary', {}, r => {
+    if (S.tab !== 'tutup' || !$('#tbody')) return; const typed = $('#tf') && ($('#tf').value || ($('#tk') || {}).value || ($('#tn') || {}).value); S.shift = r; if (typed) return; /* jangan menimpa isian yang sedang diketik */ const kv = (a, b) => '<div class="kv"><span>' + a + '</span><span>' + b + '</span></div>';
     $('#tbody').innerHTML = '<div class="li" style="display:block">' + kv('Sejak', esc(String(r.dari).slice(0, 16))) + kv('Jumlah transaksi', num(r.jumlah_trx)) + '</div>' +
       '<label>Modal awal laci (Rp)<input class="inp" id="tm" inputmode="numeric" placeholder="0" value="' + (r.modal_terakhir ? esc(r.modal_terakhir) : '') + '"></label>' +
       '<label>Kas keluar tunai selama shift (Rp)<input class="inp" id="tk" inputmode="numeric" placeholder="0"></label><p class="muted" style="margin:-4px 0 6px">Mis. beli es batu atau plastik memakai uang laci.</p>' +
       '<label>Uang tunai di laci sekarang (Rp)<input class="inp" id="tf" inputmode="numeric" placeholder="Hitung dulu, lalu isi"></label><label>Catatan (opsional)<input class="inp" id="tn"></label><button class="btn pri big" data-act="tclose">Tutup kasir</button><div id="tlist"></div>';
     tutupList();
-  } catch (e) { if (e.auth) softLogout(); else if ($('#tbody')) $('#tbody').innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }
+  }, {fail: e => { if ($('#tbody')) $('#tbody').innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }});
 }
-async function tutupList() { try { const L = await api('shift.list', {}); if (!$('#tlist') && !$('#tbody')) return; const h = '<h3 style="margin:14px 0 6px">Penutupan terakhir</h3>' + (L.length ? L.slice(0, 10).map(x => '<div class="li" style="display:block"><div class="kv"><b>' + esc(x.kasir) + '</b><span>' + esc(String(x.sampai).slice(0, 16)) + '</span></div><div class="muted">' + num(x.jumlah_trx) + ' trx · total ' + rp(x.total_semua) + ' · tunai laci ' + rp(x.uang_fisik) + (own() ? ' · modal ' + rp(x.modal_awal) + (x.fisik_sebelumnya != null && Math.abs(Number(x.modal_awal) - x.fisik_sebelumnya) > 0.5 ? ' (sisa laci sebelumnya ' + rp(x.fisik_sebelumnya) + ')' : '') + (Number(x.kas_keluar) > 0 ? ' · kas keluar ' + rp(x.kas_keluar) : '') : '') + ' · selisih <b style="color:' + (Number(x.selisih_tunai) === 0 ? 'var(--ok)' : 'var(--err)') + '">' + rp(x.selisih_tunai) + '</b></div></div>').join('') : '<p class="muted">Belum ada.</p>'); const el = $('#tlist') || $('#tbody'); if (el) el.insertAdjacentHTML($('#tlist') ? 'beforeend' : 'beforeend', h); } catch (e) {} }
+async function tutupList() { await vload('shift.list', {}, L => { let el = $('#tlist'); if (!el && $('#tbody')) { el = document.createElement('div'); el.id = 'tlist'; $('#tbody').appendChild(el); } if (!el) return; const h = '<h3 style="margin:14px 0 6px">Penutupan terakhir</h3>' + (L.length ? L.slice(0, 10).map(x => '<div class="li" style="display:block"><div class="kv"><b>' + esc(x.kasir) + '</b><span>' + esc(String(x.sampai).slice(0, 16)) + '</span></div><div class="muted">' + num(x.jumlah_trx) + ' trx · total ' + rp(x.total_semua) + ' · tunai laci ' + rp(x.uang_fisik) + (own() ? ' · modal ' + rp(x.modal_awal) + (x.fisik_sebelumnya != null && Math.abs(Number(x.modal_awal) - x.fisik_sebelumnya) > 0.5 ? ' (sisa laci sebelumnya ' + rp(x.fisik_sebelumnya) + ')' : '') + (Number(x.kas_keluar) > 0 ? ' · kas keluar ' + rp(x.kas_keluar) : '') : '') + ' · selisih <b style="color:' + (Number(x.selisih_tunai) === 0 ? 'var(--ok)' : 'var(--err)') + '">' + rp(x.selisih_tunai) + '</b></div></div>').join('') : '<p class="muted">Belum ada.</p>'); el.innerHTML = h; }); }
 async function tutupSimpan() {
   const v = dnum(($('#tf') || {}).value), opt = id => { const x = ($(id) || {}).value; return x === '' || x == null ? 0 : dnum(x); }, modal = opt('#tm'), keluar = opt('#tk');
   if (isNaN(v) || v < 0 || ($('#tf') || {}).value === '') return toast('Isi jumlah uang tunai di laci');
@@ -1318,5 +1337,5 @@ if (window.MutationObserver) new MutationObserver(() => { cancelAnimationFrame(S
 if (window.matchMedia) { const mq = matchMedia('(min-width: 900px)'); (mq.addEventListener ? mq.addEventListener.bind(mq, 'change') : mq.addListener.bind(mq))(() => { if (S.token && S.data && $('#sheet').hidden && !S.dirty) render(); }); }
 Object.assign(APP.views, {tutup: vTutup, kasir: vKasir, riwayat: vRiwayat, stok: vStok, menu: vMenu, master: vMaster, users: vUsers, settings: vSettings, diag: vDiag});
 Object.assign(APP, {S: S, api: api, $: $, rp: rp, num: num, esc: esc, LS: LS, T: T, sheet: sheet, closeSheet: closeSheet, toast: toast, busy: busy, busyLabel: busyLabel, skel: skel, ACT: ACT,
-  render: render, loadData: loadData, patchRecipe: patchRecipe, patchMaster: patchMaster, checkUpdates: checkUpdates, verSync: verSync, dverKey: dverKey, dnum: dnum, qf: qf, r6: r6, flush: flush, Store: Store, isWide: isWide, skuLevel: skuLevel, wrapChips: wrapChips, isAddon: isAddon, emptyState: emptyState, idDate: idDate, idRange: idRange, addDays: addDays, lvText: lvText, vById: vById, pById: pById, vName: vName, vSub: vSub, chName: chName, fmtDT: fmtDT, today: today, own: own, start: start});
+  render: render, loadData: loadData, patchRecipe: patchRecipe, patchMaster: patchMaster, checkUpdates: checkUpdates, verSync: verSync, dverKey: dverKey, vload: vload, dnum: dnum, qf: qf, r6: r6, flush: flush, Store: Store, isWide: isWide, skuLevel: skuLevel, wrapChips: wrapChips, isAddon: isAddon, emptyState: emptyState, idDate: idDate, idRange: idRange, addDays: addDays, lvText: lvText, vById: vById, pById: pById, vName: vName, vSub: vSub, chName: chName, fmtDT: fmtDT, today: today, own: own, start: start});
 })();

@@ -16,8 +16,8 @@ S.dp = 'hari'; S.pform = {jenis: 'batch', recipe: '', batch: '1', catatan: ''}; 
 /* ---------- Akurasi laba: produk terjual yang HPP-nya masih 0 ---------- */
 const hc = {};
 function hppCheck(from, to) {
-  const k = from + '|' + to; if (hc[k] && Date.now() - hc[k].t < 60000) return Promise.resolve(hc[k].v);
-  return api('report.get', {type: 'penjualan', from: from, to: to}, {silent: true}).then(r => { const v = hppOf(r.rows); hc[k] = {t: Date.now(), v: v}; return v; });
+  const k = from + '|' + to, vk = A.dverKey() + '|' + A.today(); if (hc[k] && hc[k].vk === vk) return Promise.resolve(hc[k].v);
+  return api('report.get', {type: 'penjualan', from: from, to: to}, {silent: true}).then(r => { const v = hppOf(r.rows); hc[k] = {vk: vk, v: v}; return v; });
 }
 const hppOf = rows => { const bad = rows.filter(x => !(Number(x[5]) > 0)); return {n: bad.length, names: bad.map(x => (x[0] + ' ' + x[1]).trim())}; };
 const warnBanner = v => '<div class="warn-b" role="alert"><div><b>Laba belum akurat:</b> ' + v.n + ' produk belum punya resep/HPP<div class="muted">' + esc(v.names.slice(0, 3).join(', ')) + (v.names.length > 3 ? ' dan ' + (v.names.length - 3) + ' lainnya' : '') + '</div></div><button class="btn pri sm" data-act="go_resep">Lengkapi di Resep</button></div>';
@@ -95,7 +95,7 @@ function costHtml(c) {
 const JN = {batch: 'Batch', pesanan: 'Per pesanan', repack: 'Repack'};
 function vProduksi() {
   $('#main').innerHTML = '<div class="row2"><button class="btn pri" data-act="pnew">+ Produksi baru</button><button class="btn sec" data-act="go_resep">Resep</button></div><div id="plist" style="margin-top:10px">' + skel(3) + '</div>';
-  api('production.list', {}).then(r => { S.prod = r; drawProd(); }).catch(e => { if ($('#plist')) $('#plist').innerHTML = '<p class="muted">' + esc(e.message) + '</p>'; });
+  A.vload('production.list', {}, r => { S.prod = r; drawProd(); }, {fail: e => { if ($('#plist')) $('#plist').innerHTML = '<p class="muted">' + esc(e.message) + '</p>'; }});
 }
 function drawProd() {
   const el = $('#plist'); if (!el) return;
@@ -231,7 +231,7 @@ function vLaporan(skipRun) {
 function fmtCell(v, f) { return f === 'rp' ? rp(v) : f === 'num' ? dec(v) : f === 'pct' ? pct(v) : esc(v); }
 function runReport() {
   const el = $('#rres'); if (!el) return; el.innerHTML = skel(4); const want = S.rt;
-  api('report.get', {type: want, from: S.rfrom, to: S.rto}).then(r => {
+  A.vload('report.get', {type: want, from: S.rfrom, to: S.rto}, r => {
     if (S.tab !== 'laporan' || S.rt !== want || !$('#rres')) return; S.rres = r;
     const mgHpp = r.type === 'penjualan' ? {7: 5} : r.type === 'hpp' ? {9: 5, 10: 6} : {}, cell = (row, i, v) => (mgHpp[i] !== undefined && !(Number(row[mgHpp[i]]) > 0)) ? qMark : (v === '' || v == null) && r.fmt[i] !== 'txt' ? '-' : fmtCell(v, r.fmt[i]); // margin tanpa HPP tampil ?; kolom angka kosong tampil -
     $('#rres').innerHTML = '<div id="hppw"></div><b>' + esc(r.title) + '</b> <span class="muted">' + (['stok', 'hpp'].indexOf(want) >= 0 ? 'kondisi saat ini' : esc(idRange(r.from, r.to))) + '</span>' +
@@ -243,7 +243,7 @@ function runReport() {
       '<div class="row2"><button class="btn sec" data-act="rcsv">Unduh CSV</button><button class="btn sec" data-act="rwa">Bagikan WhatsApp</button></div>';
     const show = v => { if (!v.n || !$('#hppw')) return; $('#hppw').innerHTML = warnBanner(v); document.querySelectorAll('.mgv').forEach(e => { if (Number(e.dataset.v) >= 99.5) e.innerHTML = qMark; }); };
     if (r.type === 'penjualan' || r.type === 'hpp') show(hppOf(r.rows)); else if (r.type === 'labarugi' || r.type === 'channel') hppCheck(r.from, r.to).then(show).catch(() => {});
-  }).catch(e => { if ($('#rres')) $('#rres').innerHTML = '<p class="err">' + esc(e.message) + '</p>'; });
+  }, {fail: e => { if ($('#rres')) $('#rres').innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }});
 }
 function csvText(r) { const q = x => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"'; return [r.columns.map(q).join(',')].concat(r.rows.map(row => row.map(q).join(','))).join('\r\n'); }
 function download(name, text) { try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\uFEFF' + text], {type: 'text/csv;charset=utf-8'})); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 3000); } catch (e) { toast('Unduh tidak didukung di perangkat ini'); } }
@@ -360,7 +360,7 @@ async function stockAudit() {
 /* ---------- Arsip data ---------- */
 function vArsip() {
   $('#main').innerHTML = '<button class="chip" data-act="tab" data-t="menu">← Menu</button><div id="abody" style="margin-top:8px">' + skel(3) + '</div>';
-  api('archive.status', {}).then(r => {
+  A.vload('archive.status', {}, r => {
     if (!$('#abody')) return; const tot = r.kandidat.reduce((a, x) => a + x.baris, 0), L = {sales: 'Penjualan', purchases: 'Pembelian', production_orders: 'Produksi', expenses: 'Biaya', audit_log: 'Log perubahan', stock_movements: 'Mutasi stok'};
     $('#abody').innerHTML = '<div class="card-s"><h3>Ukuran database</h3><div class="kv"><span>Perkiraan sel terpakai</span><b>' + dec(r.sel) + ' dari ' + dec(r.batas) + '</b></div><div class="bar"><i style="width:' + Math.min(100, r.persen) + '%"></i></div><p class="muted">' + r.persen + '% dari batas Google Sheets. Makin kecil, makin cepat aplikasi.</p>' +
       r.tabel.map(t => '<div class="kv"><span>' + esc(L[t.tabel] || t.tabel) + '</span><span>' + dec(t.baris) + ' baris</span></div>').join('') + '</div>' +
@@ -368,7 +368,7 @@ function vArsip() {
       '<label>Simpan di database utama selama<select class="inp" id="ar_b">' + [6, 12, 13, 18, 24].map(b => '<option value="' + b + '"' + (b === r.bulan ? ' selected' : '') + '>' + b + ' bulan</option>').join('') + '</select></label><button class="btn sec sm" data-act="arsipsave">Simpan batas</button>' +
       '<div style="margin-top:10px">' + (tot ? '<b>Dapat diarsipkan sekarang (sebelum ' + esc(r.cutoff) + '):</b>' + r.kandidat.map(x => '<div class="kv"><span>' + esc(L[x.tabel] || x.tabel) + '</span><span>' + dec(x.baris) + ' baris</span></div>').join('') : '<p class="muted">Belum ada data yang melewati batas. Tidak ada yang perlu diarsipkan.</p>') + '</div>' +
       '<button class="btn pri" data-act="arsiprun"' + (tot ? '' : ' disabled') + '>Arsipkan sekarang</button><p class="muted">Laporan untuk periode yang sudah diarsipkan tidak lagi tampil di aplikasi; datanya tetap ada di spreadsheet arsip di Google Drive Anda.</p></div>';
-  }).catch(e => { if ($('#abody')) $('#abody').innerHTML = '<p class="err">' + esc(e.message) + '</p>'; });
+  }, {fail: e => { if ($('#abody')) $('#abody').innerHTML = '<p class="err">' + esc(e.message) + '</p>'; }});
 }
 /* ---------- Aksi ---------- */
 Object.assign(ACT, {
