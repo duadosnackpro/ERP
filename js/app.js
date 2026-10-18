@@ -96,7 +96,7 @@ const skel = n => Array.from({length: n || 3}, () => '<div class="sk"></div>').j
 function applyQueueStock() {
   S.queue.forEach(q => { if (q.status === 'pending') q.payload.items.forEach(it => { const v = vById(it.variant_id); if (v) v.stok = (Number(v.stok) || 0) - it.qty; }); });
 }
-async function loadData() { S.data = await api('bootstrap'); applyQueueStock(); S.lastSync = Date.now(); LS.set('lastsync', S.lastSync); LS.set('data', S.data); if (S.cat !== 'Semua' && !S.data.products.some(p => p.kategori === S.cat)) S.cat = 'Semua'; }
+async function loadData() { S.data = await api('bootstrap'); applyQueueStock(); S.lastSync = Date.now(); LS.set('lastsync', S.lastSync); LS.set('data', S.data); if (S.cat !== 'Semua' && !S.data.products.some(p => p.kategori === S.cat)) S.cat = 'Semua'; setTimeout(fotoWarm, 1500); }
 async function refreshStock() { // menyegarkan stok produk jadi dari server; false bila server belum mengenal stock.get (klien memuat penuh)
   let r; try { r = await api('stock.get', {}, {silent: true}); } catch (e) { if (e.server && /Aksi tidak dikenal/.test(e.message)) return false; throw e; }
   S.data.variants.forEach(v => { if (r.stok[v.id] !== undefined) v.stok = r.stok[v.id]; });
@@ -539,7 +539,70 @@ function vKasir() {
 const isOff = v => priceOf(v.id, S.ch) == null || (T(cfg('blokir_stok_minus')) && (Number(v.stok) || 0) <= 0);
 const TILE = [['#E0A23C', '#B8741E'], ['#E07B3C', '#9E4514'], ['#C9482A', '#8A2410'], ['#D9A441', '#8F5A1C'], ['#B8602A', '#6B1409'], ['#E7B25A', '#C07A22']];
 const tileOf = v => { let h = 0; String(v.product_id || v.id).split('').forEach(c => { h = (h * 31 + c.charCodeAt(0)) >>> 0; }); return TILE[h % TILE.length]; };
-const photoHtml = v => '<span class="ini">' + esc(String(vName(v)).trim().charAt(0).toUpperCase()) + '</span>'; // tahap 2: diganti <img> bila produk punya foto
+/* ===== v1.9.1 (tahap 2): foto produk. Foto = satu per PRODUK (semua varian memakainya), disimpan di Drive; products.foto_url menyimpan alamatnya ===== */
+const fotoOf = p => p && /^https:\/\//.test(p.foto_url || '') ? p.foto_url : '';
+const photoInner = (p, name) => '<span class="ini">' + esc(String(name).trim().charAt(0).toUpperCase()) + '</span>' + (fotoOf(p) ? '<img src="' + esc(fotoOf(p)) + '" alt="" crossorigin="anonymous" referrerpolicy="no-referrer" decoding="async" loading="lazy" onerror="fotoErr(this)">' : '');
+const photoHtml = v => photoInner(pById(v.product_id), vName(v));
+function fotoErr(im) { // gagal muat: sekali coba tanpa CORS (hanya online, tidak masuk cache); gagal lagi = buang gambar, huruf awal di bawahnya tampil
+  if (!im.dataset.r && im.hasAttribute('crossorigin')) { im.dataset.r = '1'; im.removeAttribute('crossorigin'); im.src = im.src; } else im.remove();
+}
+const FOTO = {side: 480, target: 32 * 1024, small: 40 * 1024, cache: 'duado-foto'};
+const blobB64 = b => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.onerror = () => no(new Error('baca')); r.readAsDataURL(b); });
+const toBlob = (cv, type, q) => new Promise(ok => { try { cv.toBlob(ok, type, q); } catch (e) { ok(null); } });
+async function fotoPrepare(file) { // -> {b64, bytes}. File kecil (WebP/JPEG <= 40 KB, <= 640 px) dikirim apa adanya; selain itu dipotong persegi di tengah, dikecilkan ke 480 px, dikodekan WebP (JPEG bila WebP tak didukung)
+  let src; try { src = typeof createImageBitmap === 'function' ? await createImageBitmap(file, {imageOrientation: 'from-image'}) : await loadImg(file); } catch (e1) { try { src = await loadImg(file); } catch (e2) { throw new Error('Foto tidak bisa dibaca. Gunakan JPG, PNG, atau WebP.'); } }
+  const sw = src.width || src.naturalWidth, sh = src.height || src.naturalHeight; if (!sw || !sh) throw new Error('Foto tidak bisa dibaca. Gunakan JPG, PNG, atau WebP.');
+  if ((file.type === 'image/webp' || file.type === 'image/jpeg') && file.size <= FOTO.small && Math.max(sw, sh) <= 640) { if (src.close) src.close(); return {b64: await blobB64(file), bytes: file.size}; }
+  const s = Math.min(sw, sh), m = Math.min(s, FOTO.side * 2), c0 = document.createElement('canvas'); c0.width = c0.height = m;
+  const x0 = c0.getContext('2d'); x0.fillStyle = '#fff'; x0.fillRect(0, 0, m, m); x0.imageSmoothingEnabled = true; x0.imageSmoothingQuality = 'high'; x0.drawImage(src, (sw - s) >> 1, (sh - s) >> 1, s, s, 0, 0, m, m);
+  if (src.close) src.close();
+  let side = Math.min(FOTO.side, m), best = null, type = null;
+  for (let pass = 0; pass < 3; pass++) {
+    const cv = logoDraw(c0, m, m, side, side);
+    if (!type) { const pr = await toBlob(cv, 'image/webp', 0.8); type = pr && pr.type === 'image/webp' ? 'image/webp' : 'image/jpeg'; } // Safari lama menjawab PNG untuk WebP
+    for (const q of [0.82, 0.72, 0.62, 0.52, 0.42]) {
+      const b = await toBlob(cv, type, q); if (!b) throw new Error('Foto tidak bisa dikompres di perangkat ini.');
+      if (!best || b.size < best.size) best = b; if (b.size <= FOTO.target) return {b64: await blobB64(b), bytes: b.size};
+    }
+    side = Math.max(160, Math.round(side * 0.85)); // masih di atas target: kecilkan ukuran lalu ulangi
+  }
+  return {b64: await blobB64(best), bytes: best.size};
+}
+function fotoInner(id) {
+  const p = S.data.products.find(x => x.id === id); if (!p) return '';
+  const t = tileOf({id: id}), has = !!fotoOf(p);
+  return '<div class="fprev ph" style="--t1:' + t[0] + ';--t2:' + t[1] + '">' + photoInner(p, p.nama) + '</div><div class="fact"><b>Foto produk</b><span class="muted">Tampil di halaman Kasir untuk semua varian. Dikecilkan otomatis (±480 px, ±30 KB).</span><div class="row2"><button class="btn sec sm" data-act="fotopick">' + (has ? 'Ganti foto' : 'Pilih foto') + '</button>' + (has ? '<button class="btn dan sm" data-act="fotodel">Hapus foto</button>' : '') + '</div></div>';
+}
+const fotoBox = id => id ? '<input type="file" id="foto_file" accept="image/*" hidden><div class="fbox" id="fbox">' + fotoInner(id) + '</div>' : '<p class="muted">Simpan produk dulu, lalu buka lagi untuk menambahkan foto.</p>';
+function fotoApply(pid, url) {
+  const p = S.data.products.find(x => x.id === pid); if (p) p.foto_url = url; LS.set('data', S.data);
+  const b = $('#fbox'); if (b && S.fotoFor === pid) b.innerHTML = fotoInner(pid);
+  if (S.tab === 'kasir' && $('#grid')) grid(); setTimeout(fotoWarm, 300);
+}
+async function fotoLoad(file) {
+  const pid = S.fotoFor; if (!file || !pid) return;
+  if (!/^image\//.test(file.type || '')) return toast('Pilih file gambar (JPG, PNG, atau WebP)');
+  if (file.size > 25 * 1024 * 1024) return toast('Foto terlalu besar (maks. 25 MB)');
+  if (navigator.onLine === false) return toast('Tidak ada koneksi. Foto hanya bisa diunggah saat online.');
+  return busy('Menyiapkan foto…', async () => {
+    let r; try { r = await fotoPrepare(file); } catch (e) { return toast(e.message); }
+    busyLabel('Mengunggah foto (' + Math.max(1, Math.round(r.bytes / 1024)) + ' KB)…');
+    try { const out = await api('produk.foto', {product_id: pid, data: r.b64}); fotoApply(pid, out.foto_url); toast('Foto tersimpan'); } catch (e) { toast(e.message); }
+  });
+}
+async function fotoDel() {
+  const pid = S.fotoFor; if (!pid || !confirm('Hapus foto produk ini?')) return;
+  return busy('Menghapus foto…', async () => { try { await api('produk.foto', {product_id: pid, data: ''}); fotoApply(pid, ''); toast('Foto dihapus'); } catch (e) { toast(e.message); } });
+}
+let fotoBusy = false;
+async function fotoWarm() { // simpan semua foto katalog ke cache offline (satu per satu, ringan) dan buang yang sudah tidak dipakai
+  if (fotoBusy || !S.data || !window.caches || navigator.onLine === false) return; fotoBusy = true;
+  try {
+    const urls = Array.from(new Set((S.data.products || []).map(fotoOf).filter(Boolean))), keep = new Set(urls.map(u => new URL(u).href)), c = await caches.open(FOTO.cache);
+    for (const u of urls) { try { if (!(await c.match(u, {ignoreVary: true}))) { const r = await fetch(u, {mode: 'cors', credentials: 'omit'}); if (r.ok) await c.put(u, r); } } catch (e) { /* offline atau tanpa CORS: tampil saat online saja */ } }
+    for (const k of await c.keys()) if (!keep.has(k.url)) await c.delete(k);
+  } catch (e) { logErr(e, 'foto'); } finally { fotoBusy = false; }
+}
 function cardHtml(v) {
   const pr = priceOf(v.id, S.ch), st = Number(v.stok) || 0, q = cartQty(v.id), off = isOff(v), lv = lvText(v.level_pedas), t = tileOf(v);
   const stk = st <= 0 ? '' : st <= 5 ? '<span class="stk low">Sisa ' + num(st) + '</span>' : '<span class="stk">Stok ' + num(st) + '</span>';
@@ -824,7 +887,8 @@ function vMaster() {
 async function loadExp() { try { S.exp = await api('master.list', {table: 'expenses'}); S.expLoaded = true; if (S.tab === 'master') vMaster(); } catch (e) { toast(e.message); } }
 function meditSheet(id) {
   const cfg = MT[S.mt], r = id ? (S.mt === 'expenses' ? S.exp : S.data[cfg.k]).find(x => x.id === id) : {tanggal: today()};
-  sheet('<h2>' + (id ? 'Ubah ' : 'Tambah ') + cfg.l.toLowerCase() + '</h2>' + cfg.f.map(f => field(f, r[f[0]])).join('') + (S.mt === 'product_variants' ? '<button class="btn sec sm" data-act="skugen" data-id="' + esc(id) + '">Buat SKU otomatis</button>' : '') + '<button class="btn pri" data-act="msave" data-id="' + esc(id) + '">Simpan</button>' + (id ? '<button class="btn dan" data-act="mdel" data-id="' + esc(id) + '">Hapus</button>' : ''));
+  S.fotoFor = S.mt === 'products' ? id : null;
+  sheet('<h2>' + (id ? 'Ubah ' : 'Tambah ') + cfg.l.toLowerCase() + '</h2>' + (S.mt === 'products' ? fotoBox(id) : '') + cfg.f.map(f => field(f, r[f[0]])).join('') + (S.mt === 'product_variants' ? '<button class="btn sec sm" data-act="skugen" data-id="' + esc(id) + '">Buat SKU otomatis</button>' : '') + '<button class="btn pri" data-act="msave" data-id="' + esc(id) + '">Simpan</button>' + (id ? '<button class="btn dan" data-act="mdel" data-id="' + esc(id) + '">Hapus</button>' : ''));
 }
 async function mSave(id) {
   return busy('Menyimpan data…', async () => {
@@ -1005,7 +1069,7 @@ const ACT = {
   resetgo: () => { const q = k => { const e = document.querySelector('#sheet [data-rs=' + k + ']'); return !!(e && e.checked); };
     return busy('Membuat cadangan dan mereset data…', async () => { try { const r = await api('data.reset', {konfirmasi: 'RESET', pembelian: q('pembelian'), produksi: q('produksi'), biaya: q('biaya'), nol_stok: q('nol')});
       ['hari', 'minggu', 'bulan'].forEach(p => LS.del('dash_' + p)); S.exp = null; S.expLoaded = false; S.day = null; await loadData(); closeSheet(); render(); resetResult(r); } catch (e) { toast(e.message); } }); },
-  logopick: () => { if (S.dirty) return toast('Simpan perubahan pengaturan dulu.'); const f = $('#logo_file'); if (f) f.click(); }, logosave: logoSave, logodel: logoDel,
+  fotopick: () => { const f = $('#foto_file'); if (f) f.click(); }, fotodel: fotoDel, logopick: () => { if (S.dirty) return toast('Simpan perubahan pengaturan dulu.'); const f = $('#logo_file'); if (f) f.click(); }, logosave: logoSave, logodel: logoDel,
   logotest: () => { if (!logoOn()) return toast('Aktifkan "Cetak logo di struk" dan simpan pengaturan dulu'); printBT(testRc()); },
   go_diag: () => { S.tab = 'diag'; render(); }, go_arsip: () => { S.tab = 'arsip'; render(); },
   opin_ok: opinOk,
@@ -1050,7 +1114,7 @@ document.addEventListener('click', e => {
   ACT[a](el);
 });
 document.addEventListener('input', e => { if (S.tab === 'settings' && e.target.closest && e.target.closest('#sf')) sDirty(); const d = e.target.dataset; if (d && d.rs === 'c') { const b = $('#rsbtn'); if (b) b.disabled = !(e.target.value.trim() === 'RESET' && !S.queue.length); } });
-document.addEventListener('change', e => { if (e.target.id === 'logo_file') { const f = e.target.files && e.target.files[0]; e.target.value = ''; logoLoad(f); return; } if (S.tab === 'settings' && e.target.closest && e.target.closest('#sf')) sDirty(); });
+document.addEventListener('change', e => { if (e.target.id === 'foto_file') { const f = e.target.files && e.target.files[0]; e.target.value = ''; fotoLoad(f); return; } if (e.target.id === 'logo_file') { const f = e.target.files && e.target.files[0]; e.target.value = ''; logoLoad(f); return; } if (S.tab === 'settings' && e.target.closest && e.target.closest('#sf')) sDirty(); });
 document.addEventListener('input', e => { if (e.target.dataset && e.target.dataset.lg) logoEdit(e.target); });
 window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.installEv = e; if (S.tab === 'menu' && S.data) vMenu(); });

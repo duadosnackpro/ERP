@@ -298,3 +298,4 @@ html,body,#app{background:var(--bg)}
 .kgrid.k3{grid-template-columns:repeat(3,1fr);gap:8px}.k3 .kpi{padding:10px 11px}.k3 .kpi b{font-size:15px}
 .stack{display:flex;height:12px;border-radius:6px;overflow:hidden;gap:2px;margin:8px 0 12px}.stack i{display:block;min-width:2px}
 .bar{height:6px}.bar i{height:6px;background:var(--org)}
+.fbox{display:flex;gap:12px;align-items:center;margin:4px 0 12px}.fprev.ph{width:88px;flex:none;border-radius:14px}.fprev .ini{font-size:34px}.fact{display:flex;flex-direction:column;gap:6px;min-width:0}.fact .muted{font-size:12px}
