@@ -537,13 +537,16 @@ function vKasir() {
   grid(); if (wide) mountCart(); qstatUpd();
 }
 const isOff = v => priceOf(v.id, S.ch) == null || (T(cfg('blokir_stok_minus')) && (Number(v.stok) || 0) <= 0);
+const TILE = [['#E0A23C', '#B8741E'], ['#E07B3C', '#9E4514'], ['#C9482A', '#8A2410'], ['#D9A441', '#8F5A1C'], ['#B8602A', '#6B1409'], ['#E7B25A', '#C07A22']];
+const tileOf = v => { let h = 0; String(v.product_id || v.id).split('').forEach(c => { h = (h * 31 + c.charCodeAt(0)) >>> 0; }); return TILE[h % TILE.length]; };
+const photoHtml = v => '<span class="ini">' + esc(String(vName(v)).trim().charAt(0).toUpperCase()) + '</span>'; // tahap 2: diganti <img> bila produk punya foto
 function cardHtml(v) {
-  const pr = priceOf(v.id, S.ch), st = Number(v.stok) || 0, q = cartQty(v.id), off = isOff(v), lv = lvText(v.level_pedas);
+  const pr = priceOf(v.id, S.ch), st = Number(v.stok) || 0, q = cartQty(v.id), off = isOff(v), lv = lvText(v.level_pedas), t = tileOf(v);
   const stk = st <= 0 ? '' : st <= 5 ? '<span class="stk low">Sisa ' + num(st) + '</span>' : '<span class="stk">Stok ' + num(st) + '</span>';
   const bad = pr == null ? '<span class="badge-out warn">Harga?</span>' : st <= 0 ? '<span class="badge-out">HABIS</span>' : '';
-  return '<i class="hb"></i>' + bad + '<b class="pn">' + esc(vName(v)) + (lv ? ' <span class="lvt">· ' + esc(lv) + '</span>' : '') + '</b><div class="pm">' + (v.ukuran ? '<span class="sz">' + esc(v.ukuran) + '</span>' : '') + heat(v.level_pedas) + '</div>' +
+  return '<div class="ph" style="--t1:' + t[0] + ';--t2:' + t[1] + '">' + photoHtml(v) + bad + heat(v.level_pedas) + '</div><div class="bd"><b class="pn">' + esc(vName(v)) + (lv ? ' <span class="lvt">· ' + esc(lv) + '</span>' : '') + '</b>' + (v.ukuran ? '<div class="pm"><span class="sz">' + esc(v.ukuran) + '</span></div>' : '') +
     '<div class="pf"><div class="pp"><span class="pr">' + (pr == null ? 'Harga belum diatur' : rp(pr)) + '</span>' + stk + '</div>' +
-    (q ? '<div class="step"><button data-act="dec1" data-v="' + esc(v.id) + '" aria-label="Kurangi">−</button><b>' + q + '</b><button data-act="inc1" data-v="' + esc(v.id) + '" aria-label="Tambah">+</button></div>' : '<span class="plus' + (off ? ' dis' : '') + '" role="button" aria-disabled="' + (off ? 'true' : 'false') + '" aria-label="Tambah ' + esc(vName(v)) + '">+</span>') + '</div>';
+    (q ? '<div class="step"><button data-act="dec1" data-v="' + esc(v.id) + '" aria-label="Kurangi">−</button><b>' + q + '</b><button data-act="inc1" data-v="' + esc(v.id) + '" aria-label="Tambah">+</button></div>' : '<span class="plus' + (off ? ' dis' : '') + '" role="button" aria-disabled="' + (off ? 'true' : 'false') + '" aria-label="Tambah ' + esc(vName(v)) + '">+</span>') + '</div></div>';
 }
 function grid() {
   const d = S.data, q = S.q.toLowerCase(), avail = v => (Number(v.stok) || 0) > 0;
