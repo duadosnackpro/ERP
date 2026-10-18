@@ -272,21 +272,69 @@ const docText = (D, w) => D.map(x => x.qr ? '' : (x.a === 'c' ? padC(x.s, w) : x
 const receiptText = rc => { const w = rcWidth(); return docText(receiptDoc(rc, {w: w}), w); };
 function docHtml(D, w) { // pratinjau layar dan cetak browser
   return D.map(x => {
-    if (x.qr) return '<span class="qrbox">QR</span>';
+    if (x.qr) return qrImg(x.qr);
     const z = x.z === 2, s = x.a === 'c' ? padC(x.s, z ? w >> 1 : w) : x.s; let h = esc(s);
     if (x.b) h = '<b>' + h + '</b>'; return z ? '<span class="z2">' + h + '</span>' : h;
   }).join('\n');
 }
 const ascii = t => String(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[·•–—]/g, '-').replace(/[^\x20-\x7E]/g, '?');
-function escQR(data) { // QR bawaan printer (GS ( k): model 2, modul 5 titik, koreksi M; tidak semua printer murah mendukung
-  const d = Array.from(ascii(data).slice(0, 120)).map(c => c.charCodeAt(0)), k = d.length + 3;
-  return [0x1D, 0x28, 0x6B, 4, 0, 49, 65, 50, 0, 0x1D, 0x28, 0x6B, 3, 0, 49, 67, 5, 0x1D, 0x28, 0x6B, 3, 0, 49, 69, 49, 0x1D, 0x28, 0x6B, k & 255, k >> 8, 49, 80, 48].concat(d, [0x1D, 0x28, 0x6B, 3, 0, 49, 81, 48]);
+/* QR sendiri (tanpa pustaka): mode byte (UTF-8), koreksi M, versi 1-7 (maks. 122 byte). Dicetak sebagai gambar seperti logo, jadi tidak bergantung pada fitur QR bawaan printer. */
+const QR_T = [null, [26, 10, 1, 16], [44, 16, 1, 28], [70, 26, 1, 44], [100, 18, 2, 32], [134, 24, 2, 43], [172, 16, 4, 27], [196, 18, 4, 31]]; // [kata kode total, EC per blok, jumlah blok, data per blok]
+function qrMake(text) { // -> matriks [baris][kolom] berisi 1 (gelap) / 0, atau null bila terlalu panjang
+  const bytes = Array.from(unescape(encodeURIComponent(String(text)))).map(c => c.charCodeAt(0)); let v = 1;
+  while (v <= 7 && bytes.length > QR_T[v][2] * QR_T[v][3] - 2) v++; if (v > 7) return null;
+  const tot = QR_T[v][0], ecn = QR_T[v][1], nb = QR_T[v][2], dpb = QR_T[v][3], nd = nb * dpb, size = 17 + 4 * v, bits = [], put = (x, n) => { for (let i = n - 1; i >= 0; i--) bits.push((x >> i) & 1); };
+  put(4, 4); put(bytes.length, 8); bytes.forEach(x => put(x, 8)); put(0, Math.min(4, nd * 8 - bits.length)); while (bits.length % 8) bits.push(0);
+  const cw = []; for (let i = 0; i < bits.length; i += 8) cw.push(parseInt(bits.slice(i, i + 8).join(''), 2)); for (let pd = 0xEC; cw.length < nd; pd ^= 0xFD) cw.push(pd);
+  const ex = new Array(512), lg = new Array(256); for (let i = 0, x = 1; i < 255; i++) { ex[i] = x; lg[x] = i; x <<= 1; if (x & 256) x ^= 0x11D; } for (let i = 255; i < 512; i++) ex[i] = ex[i - 255];
+  const mul = (x, y) => x && y ? ex[lg[x] + lg[y]] : 0; let g = [1];
+  for (let i = 0; i < ecn; i++) { const nn = new Array(g.length + 1).fill(0); for (let j = 0; j < g.length; j++) { nn[j] ^= g[j]; nn[j + 1] ^= mul(g[j], ex[i]); } g = nn; }
+  const rs = d => { const r = new Array(ecn).fill(0); d.forEach(x => { const f = x ^ r[0]; r.shift(); r.push(0); if (f) for (let j = 0; j < ecn; j++) r[j] ^= mul(g[j + 1], f); }); return r; };
+  const blk = [], ecs = []; for (let i = 0; i < nb; i++) { const d = cw.slice(i * dpb, (i + 1) * dpb); blk.push(d); ecs.push(rs(d)); }
+  const fin = []; for (let i = 0; i < dpb; i++) blk.forEach(x => fin.push(x[i])); for (let i = 0; i < ecn; i++) ecs.forEach(x => fin.push(x[i]));
+  const fb = []; fin.forEach(x => { for (let i = 7; i >= 0; i--) fb.push((x >> i) & 1); });
+  const m = [], fn = []; for (let y = 0; y < size; y++) { m.push(new Array(size).fill(0)); fn.push(new Array(size).fill(false)); }
+  const set = (x, y, val) => { m[y][x] = val ? 1 : 0; fn[y][x] = true; };
+  [[0, 0], [size - 7, 0], [0, size - 7]].forEach(f => { for (let dy = -1; dy <= 7; dy++) for (let dx = -1; dx <= 7; dx++) { const x = f[0] + dx, y = f[1] + dy; if (x < 0 || y < 0 || x >= size || y >= size) continue; const d = Math.max(Math.abs(dx - 3), Math.abs(dy - 3)); set(x, y, d <= 1 || d === 3); } });
+  for (let i = 0; i < size; i++) { if (!fn[6][i]) set(i, 6, i % 2 === 0); if (!fn[i][6]) set(6, i, i % 2 === 0); }
+  const ap = v === 1 ? [] : v <= 6 ? [6, 4 * v + 10] : [6, 22, 38];
+  const ae = ap[ap.length - 1]; ap.forEach(cy => ap.forEach(cx => { if ((cx === 6 && cy === 6) || (cx === 6 && cy === ae) || (cy === 6 && cx === ae)) return; for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) set(cx + dx, cy + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1); }));
+  for (let i = 0; i < 9; i++) { fn[8][i] = fn[i][8] = true; } for (let i = 0; i < 8; i++) { fn[8][size - 1 - i] = fn[size - 1 - i][8] = true; } set(8, size - 8, 1);
+  if (v >= 7) { let r = v; for (let i = 0; i < 12; i++) r = (r << 1) ^ ((r >>> 11) * 0x1F25); const vb = (v << 12) | r; for (let i = 0; i < 18; i++) { const bt = (vb >>> i) & 1, a2 = size - 11 + i % 3, b2 = Math.floor(i / 3); set(a2, b2, bt); set(b2, a2, bt); } }
+  let bi = 0, up = true; for (let x = size - 1; x > 0; x -= 2) { if (x === 6) x--; for (let k = 0; k < size; k++) { const y = up ? size - 1 - k : k; for (let dx = 0; dx < 2; dx++) if (!fn[y][x - dx]) m[y][x - dx] = bi < fb.length ? fb[bi++] : 0; } up = !up; }
+  const MC = [(i, j) => (i + j) % 2 === 0, (i) => i % 2 === 0, (i, j) => j % 3 === 0, (i, j) => (i + j) % 3 === 0, (i, j) => (Math.floor(i / 2) + Math.floor(j / 3)) % 2 === 0, (i, j) => (i * j) % 2 + (i * j) % 3 === 0, (i, j) => ((i * j) % 2 + (i * j) % 3) % 2 === 0, (i, j) => ((i + j) % 2 + (i * j) % 3) % 2 === 0];
+  const penalty = q => {
+    let pn = 0, dark = 0; const line = a => { let run = 1; for (let i = 1; i <= a.length; i++) { if (i < a.length && a[i] === a[i - 1]) run++; else { if (run >= 5) pn += 3 + run - 5; run = 1; } } const t = a.join(''); [/10111010000/g, /00001011101/g].forEach(re => { const mm = t.match(re); if (mm) pn += 40 * mm.length; }); };
+    for (let y = 0; y < size; y++) { line(q[y]); line(q.map(r => r[y])); for (let x = 0; x < size; x++) { if (q[y][x]) dark++; if (x + 1 < size && y + 1 < size && q[y][x] === q[y][x + 1] && q[y][x] === q[y + 1][x] && q[y][x] === q[y + 1][x + 1]) pn += 3; } }
+    return pn + (Math.ceil(Math.abs(dark * 20 - size * size * 10) / (size * size)) - 1) * 10;
+  };
+  let best = null, bp = 1e9;
+  for (let mk = 0; mk < 8; mk++) {
+    const q = m.map(r => r.slice()), sf = (x, y, val) => { q[y][x] = val; };
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (!fn[y][x] && MC[mk](y, x)) q[y][x] ^= 1;
+    let r = mk; for (let i = 0; i < 10; i++) r = (r << 1) ^ ((r >>> 9) * 0x537); const fm = ((mk << 10) | r) ^ 0x5412, bt = i => (fm >>> i) & 1;
+    for (let i = 0; i <= 5; i++) sf(8, i, bt(i)); sf(8, 7, bt(6)); sf(8, 8, bt(7)); sf(7, 8, bt(8)); for (let i = 9; i < 15; i++) sf(14 - i, 8, bt(i));
+    for (let i = 0; i < 8; i++) sf(size - 1 - i, 8, bt(i)); for (let i = 8; i < 15; i++) sf(8, size - 15 + i, bt(i)); sf(8, size - 8, 1);
+    const pnl = penalty(q); if (pnl < bp) { bp = pnl; best = q; }
+  }
+  return best;
+}
+function qrBitmap(text, maxW) { // QR -> bitmap 1-bit (zona tenang 2 modul), modul 2-5 titik mengikuti lebar kertas
+  const q = qrMake(text); if (!q) return null;
+  const n = q.length, sc = Math.max(2, Math.min(5, Math.floor(maxW / (n + 4)))), H = (n + 4) * sc, W = Math.ceil(H / 8) * 8, off = (W - n * sc) >> 1, mono = new Uint8Array(W * H);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (q[y][x]) for (let dy = 0; dy < sc; dy++) for (let dx = 0; dx < sc; dx++) mono[(2 * sc + y * sc + dy) * W + off + x * sc + dx] = 1;
+  return {w: W, h: H, mode: 't', bytes: logoPack(mono, W, H)};
+}
+function qrImg(text) { // pratinjau layar
+  if (typeof document === 'undefined') return '<span class="qrbox">QR</span>';
+  const b = qrBitmap(text, paperDots()); if (!b) return '<i>(isi QR terlalu panjang, maks. 120 karakter)</i>';
+  const cv = document.createElement('canvas'); logoPaint(cv, b); return '<img class="lg-cv" alt="QR" src="' + cv.toDataURL('image/png') + '" style="width:' + Math.min(100, b.w / paperDots() * 100).toFixed(1) + '%">';
 }
 function escpos(rc) { // byte ESC/POS untuk printer thermal (dikirim lewat RawBT atau BLE langsung)
   const lg = logoOn(), w = rcWidth(), D = receiptDoc(rc, {w: w, rich: true, logo: lg}), out = [0x1B, 0x40], add = a => { for (const c of ascii(a)) out.push(c.charCodeAt(0)); out.push(10); };
   if (lg) { out.push(0x1B, 0x61, 1); const r = logoRaster(logoFit(lg, paperDots())); for (let i = 0; i < r.length; i++) out.push(r[i]); out.push(10, 0x1B, 0x61, 0); } // logo di tengah, atas struk
   D.forEach(x => {
-    if (x.qr) { out.push(0x1B, 0x61, 1); escQR(x.qr).forEach(v => out.push(v)); out.push(10, 0x1B, 0x61, 0); return; }
+    if (x.qr) { const qb = qrBitmap(x.qr, paperDots()); if (qb) { out.push(0x1B, 0x61, 1); logoRaster(qb).forEach(v => out.push(v)); out.push(10, 0x1B, 0x61, 0); } return; }
     out.push(0x1B, 0x61, x.a === 'c' ? 1 : 0, 0x1B, 0x45, x.b ? 1 : 0, 0x1D, 0x21, x.z === 2 ? 0x11 : 0); add(x.s);
   });
   out.push(0x1B, 0x61, 0, 0x1B, 0x45, 0, 0x1D, 0x21, 0, 0x1B, 0x64, 4); return new Uint8Array(out);
@@ -1040,7 +1088,7 @@ function vSettings() {
       sw('footer_aktif', 'Footer: catatan di bawah struk', 'Mis. ucapan terima kasih. Matikan bila tidak perlu.', true) +
       '<div id="ftr-x">' + field(['footer_struk', 'Isi footer', 'area:300'], s.footer_struk) + '</div>' +
       '<p class="muted">Satu baris di sini = satu baris di struk (teks panjang turun baris otomatis). Bungkus baris dengan *bintang* agar tercetak tebal, mis. *TERIMA KASIH*.</p>' +
-      field(['qr_struk', 'Isi QR di bawah struk (opsional)', 'text'], s.qr_struk) + '<p class="muted">Mis. tautan Instagram atau WhatsApp toko. Kosongkan bila tanpa QR. QR memakai fitur bawaan printer; uji dulu karena tidak semua printer mendukung.</p>' +
+      field(['qr_struk', 'Isi QR di bawah struk (opsional)', 'text'], s.qr_struk) + '<p class="muted">Mis. tautan Instagram atau WhatsApp toko. Kosongkan bila tanpa QR. Maks. 120 karakter. QR dicetak sebagai gambar, sama seperti logo.</p>' +
       '<button class="btn sec sm" data-act="rcpreview">Pratinjau &amp; uji cetak struk</button><p class="muted">Pratinjau memakai pengaturan yang sudah disimpan.</p>') +
     card('Pajak (PPN)', sw('ppn_aktif', 'Aktifkan PPN', 'Hitung PPN pada setiap transaksi') + '<div id="ppn-x">' + field(['ppn_persen', 'Tarif PPN (%)', 'number'], s.ppn_persen) + sw('ppn_inklusif', 'Harga jual sudah termasuk PPN') + '</div>') +
     card('Stok', sw('blokir_stok_minus', 'Blokir penjualan jika stok kurang', 'Kasir tidak bisa menjual produk yang stoknya habis') + field(['stok_menipis', 'Batas "Menipis" produk jadi (jumlah)', 'number'], g('stok_menipis', '5'))) +

@@ -1,7 +1,7 @@
 // Service worker: cache-first murni. Aset aplikasi disimpan saat pemasangan (dengan cache: 'reload' agar melewati cache HTTP GitHub Pages),
 // lalu dilayani dari cache tanpa menunggu jaringan. Pembaruan terjadi HANYA lewat penaikan VERSION di bawah (naikkan juga CONFIG.VERSION di js/config.js).
 // Pengguna lalu melihat banner "Versi baru tersedia" dan menekan "Muat ulang".
-const VERSION = 'duado-v1.9.3';
+const VERSION = 'duado-v1.9.4';
 const CORE = ['./', 'index.html', 'css/app.css', 'js/config.js', 'js/app.js', 'js/modules.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 const OPTIONAL = ['fonts/baloo2-600.woff2', 'fonts/baloo2-800.woff2']; // font lokal; aplikasi tetap jalan (font cadangan) bila belum diunduh
 const FOTO = 'duado-foto'; // cache foto produk: TIDAK ikut versi (tidak dihapus saat pembaruan); alamat foto tidak pernah berubah isinya, jadi aman cache-first. Isinya dirapikan oleh aplikasi (fotoWarm).
