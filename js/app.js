@@ -213,25 +213,83 @@ const foreign = e => { const t = String((e && e.stack) || '') + ' ' + String((e 
 function logErr(e, ctx) { if (foreign(e)) return; try { const l = LS.get('errlog', []); l.unshift({t: Date.now(), c: ctx || '', m: String((e && e.message) || e), s: String((e && e.stack) || '').split('\n').slice(0, 3).join(' | ')}); LS.set('errlog', l.slice(0, 20)); } catch (x) {} }
 window.addEventListener('error', ev => { if (/-extension:\/\//.test(String(ev.filename || ''))) return; logErr(ev.error || ev.message, 'error'); });
 window.addEventListener('unhandledrejection', ev => logErr(ev.reason, 'promise'));
-/* struk: satu sumber teks untuk layar, WhatsApp, dan printer; lebar mengikuti pengaturan (32 = 58 mm, 48 = 80 mm) */
+/* struk: satu sumber untuk layar, WhatsApp, dan printer. receiptDoc() menyusun baris struk (teks, tebal, ukuran, rata); tiap keluaran hanya menerjemahkannya.
+   Lebar mengikuti pengaturan: 32 = kertas 58 mm (area cetak 48 mm), 48 = kertas 80 mm (area cetak 72 mm); font A printer = 12 titik per karakter.
+   Nama usaha TIDAK dicetak bila logo aktif (logo sudah memuat nama). Header (di bawah logo) dan footer (di bawah struk) bisa diisi sendiri atau dimatikan.
+   Dalam catatan, baris yang dibungkus *bintang* dicetak tebal. */
 const rcWidth = () => Number(cfg('lebar_struk')) === 48 ? 48 : 32;
-const wrapTxt = (t, w) => { const o = []; t = String(t); while (t.length > w) { o.push(t.slice(0, w)); t = t.slice(w); } o.push(t); return o; };
-function receiptLines(rc, w, noName) {
-  w = w || rcWidth(); const line = '-'.repeat(w), L = (a, b) => { a = String(a); b = String(b); return a + ' '.repeat(Math.max(1, w - a.length - b.length)) + b; };
-  const o = [String(cfg('nama_usaha') || 'Duado Snack').toUpperCase(), line, 'No : ' + (S.nomor[rc.rid] || '(menunggu sinkron)'), 'Tgl: ' + fmtDT(rc.time), 'Via: ' + rc.ch, line];
-  rc.lines.forEach(l => { wrapTxt(l.n, w).forEach(x => o.push(x)); o.push(L(' ' + l.q + ' x ' + num(l.h), num(l.q * l.h))); });
-  o.push(line, L('Subtotal', num(rc.sub))); if (rc.dis) o.push(L('Diskon', '-' + num(rc.dis))); if (rc.ppn) o.push(L(T(cfg('ppn_inklusif')) ? 'PPN (incl.)' : 'PPN', num(rc.ppn)));
-  o.push(L('TOTAL', num(rc.total)), L('Bayar (' + rc.metode + ')', num(rc.terima))); if (rc.metode === 'tunai') o.push(L('Kembali', num(rc.kembali)));
-  o.push(line); wrapTxt(cfg('footer_struk') || 'Terima kasih', w).forEach(x => o.push(x)); if (noName) o.shift(); return o;
+function wrapWords(t, w) { // turun baris per kata; kata yang lebih panjang dari lebar dipotong
+  const o = [];
+  String(t == null ? '' : t).split(/\r?\n/).forEach(par => {
+    const ws = par.trim().split(/\s+/).filter(Boolean); if (!ws.length) { o.push(''); return; }
+    let cur = '';
+    ws.forEach(x => {
+      while (x.length > w) { if (cur) { o.push(cur); cur = ''; } o.push(x.slice(0, w)); x = x.slice(w); }
+      if (!cur) cur = x; else if (cur.length + 1 + x.length <= w) cur += ' ' + x; else { o.push(cur); cur = x; }
+    });
+    if (cur) o.push(cur);
+  });
+  return o;
 }
-const receiptText = rc => receiptLines(rc).join('\n');
+const ljust = (s, n) => s.length >= n ? s.slice(0, n) : s + ' '.repeat(n - s.length);
+const rjust = (s, n) => ' '.repeat(Math.max(0, n - s.length)) + s;
+const lr = (a, b, w) => { a = String(a); b = String(b); return a + ' '.repeat(Math.max(1, w - a.length - b.length)) + b; };
+const padC = (s, n) => ' '.repeat(Math.max(0, (n - s.length) >> 1)) + s;
+const dmy = d => { d = new Date(d); return p2(d.getDate()) + '/' + p2(d.getMonth() + 1) + '/' + d.getFullYear(); };
+const hms = d => { d = new Date(d); return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()); };
+function noteLines(t, w) { // catatan header/footer: rata tengah, *tebal*, baris kosong di ujung dibuang
+  const o = [];
+  String(t == null ? '' : t).split(/\r?\n/).forEach(p => { p = p.trim(); const m = /^\*(.+)\*$/.exec(p); if (m) p = m[1].trim(); wrapWords(p, w).forEach(s => o.push({s: s, a: 'c', b: !!m})); });
+  while (o.length && !o[o.length - 1].s) o.pop(); while (o.length && !o[0].s) o.shift();
+  return o;
+}
+function receiptDoc(rc, o) { // o: {w: lebar, rich: ukuran ganda + QR bawaan printer, logo: logo yang dicetak}
+  o = o || {}; const w = o.w || rcWidth(), rich = !!o.rich, wide = w >= 48, D = [], pay = String(rc.metode || '');
+  const add = (s, x) => D.push(Object.assign({s: s}, x)), hr = () => add('-'.repeat(w));
+  if (!o.logo) { const nm = String(cfg('nama_usaha') || 'Duado Snack').toUpperCase(), z = rich && nm.length * 2 <= w; wrapWords(nm, z ? w >> 1 : w).forEach(x => add(x, {a: 'c', b: true, z: z ? 2 : 1})); }
+  if (cfgOn('header_aktif', true)) noteLines(cfg('header_struk'), w).forEach(x => D.push(x));
+  hr();
+  const nomor = S.nomor[rc.rid] || '(menunggu sinkron)', kasir = String(rc.kasir || ''), kv = (k, v, lw, n) => ljust(k, lw) + ': ' + String(v).slice(0, n);
+  if (wide) { add(ljust(kv('No', nomor, 8, 18), 28) + kv('Waktu', hms(rc.time), 6, 12)); add(ljust(kv('Tanggal', dmy(rc.time), 8, 18), 28) + kv('Kasir', kasir, 6, 12)); add(kv('Via', rc.ch, 8, 38)); }
+  else { add(kv('No', nomor, 6, 24)); add(kv('Waktu', dmy(rc.time) + ' ' + hms(rc.time), 6, 24)); if (kasir) add(kv('Kasir', kasir, 6, 24)); add(kv('Via', rc.ch, 6, 24)); }
+  hr();
+  if (wide) { // tabel: ITEM | QTY | HARGA | TOTAL (satu baris per item; nama panjang turun ke baris berikutnya)
+    const Q = 4, H = 10, TT = 11, N = w - Q - H - TT - 3;
+    add(ljust('ITEM', N) + ' ' + rjust('QTY', Q) + ' ' + rjust('HARGA', H) + ' ' + rjust('TOTAL', TT), {b: true}); hr();
+    rc.lines.forEach(l => wrapWords(l.n, N).forEach((x, i) => add(i ? x : ljust(x, N) + ' ' + rjust(String(l.q), Q) + ' ' + rjust(num(l.h), H) + ' ' + rjust(num(l.q * l.h), TT))));
+  } else rc.lines.forEach(l => { wrapWords(l.n, w).forEach(x => add(x)); add(lr('  ' + l.q + ' x ' + num(l.h), num(l.q * l.h), w)); });
+  const ind = wide ? 20 : 0, pad = ' '.repeat(ind), S2 = (a, b) => add(pad + lr(a, b, w - ind));
+  hr(); S2('Subtotal', num(rc.sub)); if (rc.dis) S2('Diskon', '-' + num(rc.dis)); if (rc.ppn) S2(T(cfg('ppn_inklusif')) ? 'PPN (incl.)' : 'PPN', num(rc.ppn));
+  hr(); const tz = rich && 'TOTAL'.length + 1 + num(rc.total).length <= w >> 1; add(lr('TOTAL', num(rc.total), tz ? w >> 1 : w), {b: true, z: tz ? 2 : 1});
+  hr(); S2(pay === 'qris' ? 'QRIS' : pay.charAt(0).toUpperCase() + pay.slice(1), num(rc.terima)); if (pay === 'tunai') S2('Kembalian', num(rc.kembali));
+  const ft = cfgOn('footer_aktif', true) ? noteLines(cfg('footer_struk'), w) : [], qr = String(cfg('qr_struk') || '').trim();
+  if (ft.length || qr) hr();
+  ft.forEach(x => D.push(x));
+  if (qr) { if (rich) D.push({qr: qr}); else wrapWords(qr, w).forEach(x => add(x, {a: 'c'})); }
+  return D;
+}
+const docText = (D, w) => D.map(x => x.qr ? '' : (x.a === 'c' ? padC(x.s, w) : x.s).replace(/ +$/, '')).join('\n');
+const receiptText = rc => { const w = rcWidth(); return docText(receiptDoc(rc, {w: w}), w); };
+function docHtml(D, w) { // pratinjau layar dan cetak browser
+  return D.map(x => {
+    if (x.qr) return '<span class="qrbox">QR</span>';
+    const z = x.z === 2, s = x.a === 'c' ? padC(x.s, z ? w >> 1 : w) : x.s; let h = esc(s);
+    if (x.b) h = '<b>' + h + '</b>'; return z ? '<span class="z2">' + h + '</span>' : h;
+  }).join('\n');
+}
 const ascii = t => String(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[·•–—]/g, '-').replace(/[^\x20-\x7E]/g, '?');
+function escQR(data) { // QR bawaan printer (GS ( k): model 2, modul 5 titik, koreksi M; tidak semua printer murah mendukung
+  const d = Array.from(ascii(data).slice(0, 120)).map(c => c.charCodeAt(0)), k = d.length + 3;
+  return [0x1D, 0x28, 0x6B, 4, 0, 49, 65, 50, 0, 0x1D, 0x28, 0x6B, 3, 0, 49, 67, 5, 0x1D, 0x28, 0x6B, 3, 0, 49, 69, 49, 0x1D, 0x28, 0x6B, k & 255, k >> 8, 49, 80, 48].concat(d, [0x1D, 0x28, 0x6B, 3, 0, 49, 81, 48]);
+}
 function escpos(rc) { // byte ESC/POS untuk printer thermal (dikirim lewat RawBT atau BLE langsung)
-  const lg = logoOn(), noName = !!lg && !cfgOn('logo_nama', true), lines = receiptLines(rc, 0, noName), out = [0x1B, 0x40], add = a => { for (const c of ascii(a)) out.push(c.charCodeAt(0)); out.push(10); }, w = rcWidth();
+  const lg = logoOn(), w = rcWidth(), D = receiptDoc(rc, {w: w, rich: true, logo: lg}), out = [0x1B, 0x40], add = a => { for (const c of ascii(a)) out.push(c.charCodeAt(0)); out.push(10); };
   if (lg) { out.push(0x1B, 0x61, 1); const r = logoRaster(logoFit(lg, paperDots())); for (let i = 0; i < r.length; i++) out.push(r[i]); out.push(10, 0x1B, 0x61, 0); } // logo di tengah, atas struk
-  if (noName) lines.forEach(add);
-  else { out.push(0x1B, 0x61, 1, 0x1B, 0x45, 1); if (lines[0].length * 2 <= w) out.push(0x1D, 0x21, 0x11); add(lines[0]); out.push(0x1D, 0x21, 0, 0x1B, 0x45, 0, 0x1B, 0x61, 0); lines.slice(1).forEach(add); }
-  out.push(0x1B, 0x64, 4); return new Uint8Array(out);
+  D.forEach(x => {
+    if (x.qr) { out.push(0x1B, 0x61, 1); escQR(x.qr).forEach(v => out.push(v)); out.push(10, 0x1B, 0x61, 0); return; }
+    out.push(0x1B, 0x61, x.a === 'c' ? 1 : 0, 0x1B, 0x45, x.b ? 1 : 0, 0x1D, 0x21, x.z === 2 ? 0x11 : 0); add(x.s);
+  });
+  out.push(0x1B, 0x61, 0, 0x1B, 0x45, 0, 0x1D, 0x21, 0, 0x1B, 0x64, 4); return new Uint8Array(out);
 }
 /* ---------- Logo struk: bitmap 1-bit untuk printer thermal ----------
    Disimpan di pengaturan `logo_data` sebagai "L1;<lebar>x<tinggi>;<t|h>;<base64>" (1 = titik hitam, MSB dahulu, per baris).
@@ -423,7 +481,12 @@ async function printBT(rc) {
   if (isIOS()) return iosHelp();
   toast('Bluetooth tidak tersedia di browser ini. Memakai cetak browser.'); printBrowser();
 }
-function printBrowser() { const d = document.querySelector('#rtxt'); if (d && d.closest('details')) d.closest('details').open = true; setTimeout(() => window.print(), 60); }
+function printBrowser() {
+  const d = document.querySelector('#rtxt'); if (d && d.closest('details')) d.closest('details').open = true;
+  let st = document.getElementById('pgsz'); if (!st) { st = document.createElement('style'); st.id = 'pgsz'; document.head.appendChild(st); }
+  st.textContent = '@page{size:' + (rcWidth() === 48 ? 80 : 58) + 'mm auto;margin:0}'; // ukuran kertas mengikuti pengaturan
+  setTimeout(() => window.print(), 60);
+}
 function waSend(rc, number) {
   let n = String(number || '').replace(/\D/g, ''); if (n.indexOf('0') === 0) n = '62' + n.slice(1); else if (n.indexOf('8') === 0) n = '62' + n;
   go((n ? 'https://wa.me/' + n : 'https://api.whatsapp.com/send') + '?text=' + encodeURIComponent('```' + receiptText(rc) + '```'), true);
@@ -437,7 +500,7 @@ async function shareRc(rc) {
   const text = receiptText(rc);
   if (navigator.share) { try { await navigator.share({title: 'Struk ' + (cfg('nama_usaha') || 'Duado Snack'), text: text}); } catch (e) { if (e && e.name !== 'AbortError') copyText(text); } } else copyText(text);
 }
-const testRc = () => { S.nomor.uji = 'UJI-001'; return {rid: 'uji', time: Date.now(), ch: 'Uji coba', metode: 'tunai', terima: 20000, kembali: 3000, sub: 17000, dis: 0, ppn: 0, total: 17000, lines: [{n: 'Contoh Produk A 80gr', q: 1, h: 7000}, {n: 'Contoh Produk B 100gr', q: 1, h: 10000}]}; };
+const testRc = () => { S.nomor.uji = 'UJI-001'; return {rid: 'uji', time: Date.now(), kasir: String((S.data && S.data.user && S.data.user.nama) || 'Kasir'), ch: 'Uji coba', metode: 'tunai', terima: 20000, kembali: 3000, sub: 17000, dis: 0, ppn: 0, total: 17000, lines: [{n: 'Contoh Produk A 80gr', q: 1, h: 7000}, {n: 'Contoh Produk B 100gr', q: 1, h: 10000}]}; };
 
 /* ---------- Login ---------- */
 function renderLogin(msg) {
@@ -720,7 +783,7 @@ async function pay() {
   try {
     const payload = {request_id: rid, channel_id: S.ch, items: S.cart.map(l => ({variant_id: l.v, qty: l.qty})), diskon: c.dis, metode_bayar: S.metode, catatan: S.catatan, client_ts: ts, total_klien: c.total};
     if (override.diskon) payload.override = override;
-    rc = {rid: rid, time: ts, ch: chName(S.ch), metode: S.metode, terima: terima, kembali: terima - c.total, sub: c.sub, dis: c.dis, ppn: c.ppn, total: c.total,
+    rc = {rid: rid, time: ts, kasir: String((S.data.user && (S.data.user.nama || S.data.user.username)) || ''), ch: chName(S.ch), metode: S.metode, terima: terima, kembali: terima - c.total, sub: c.sub, dis: c.dis, ppn: c.ppn, total: c.total,
       lines: S.cart.map(l => { const v = vById(l.v); return {n: (vName(v) + ' ' + vSub(v)).trim(), q: l.qty, h: priceOf(l.v, S.ch)}; })};
     S.queue.push({rid: rid, payload: payload, status: 'pending', state: 'waiting', ts: Date.now(), uid: S.data.user.uid, total: c.total, ch: rc.ch}); LS.set('queue', S.queue);
     S.cart.forEach(l => { const v = vById(l.v); if (v) v.stok = r6((Number(v.stok) || 0) - l.qty); }); LS.set('data', S.data);
@@ -742,8 +805,9 @@ function showReceipt(rc) {
   refreshRc();
 }
 function refreshRc() { // pratinjau + cetak browser: logo (bila aktif) di atas teks struk
-  const el = $('#rtxt'); if (!el || !S.rc) return; const lg = logoOn(), u = lg ? logoURL(lg) : '';
-  el.innerHTML = (u ? '<img class="lg-cv lg-rc" alt="Logo" src="' + u + '" style="width:' + logoPct(lg) + '">' : '') + esc(receiptLines(S.rc, 0, !!lg && !cfgOn('logo_nama', true)).join('\n'));
+  const el = $('#rtxt'); if (!el || !S.rc) return; const lg = logoOn(), u = lg ? logoURL(lg) : '', w = rcWidth();
+  el.className = 'rc' + (w === 48 ? ' w48' : '');
+  el.innerHTML = (u ? '<img class="lg-cv lg-rc" alt="Logo" src="' + u + '" style="width:' + logoPct(lg) + '">' : '') + docHtml(receiptDoc(S.rc, {w: w, rich: true, logo: lg}), w);
 }
 
 /* ---------- Riwayat ---------- */
@@ -869,6 +933,7 @@ function field(f, val) {
   if (t.indexOf('ref:') === 0) { const key = t.slice(4); return '<label>' + l + '<select class="inp" data-f="' + k + '"><option value="">- pilih -</option>' + S.data[key].map(r => '<option value="' + esc(r.id) + '"' + (r.id === v ? ' selected' : '') + '>' + esc(RT[key](r)) + '</option>').join('') + '</select></label>'; }
   if (t.indexOf('sel:') === 0) return '<label>' + l + '<select class="inp" data-f="' + k + '">' + t.slice(4).split(',').map(o => '<option' + (o === v ? ' selected' : '') + '>' + o + '</option>').join('') + '</select></label>';
   if (t.indexOf('sel2:') === 0) return '<label>' + l + '<select class="inp" data-f="' + k + '">' + t.slice(5).split(',').map(o => { const p = o.split('|'); return '<option value="' + p[0] + '"' + (p[0] === v ? ' selected' : '') + '>' + p[1] + '</option>'; }).join('') + '</select></label>';
+  if (t.indexOf('area') === 0) return '<label>' + l + '<textarea class="inp ta" rows="3" maxlength="' + (Number(t.slice(5)) || 300) + '" data-f="' + k + '">' + esc(v) + '</textarea></label>';
   if (t === 'date') return '<label>' + l + '<input type="date" class="inp" data-f="' + k + '" value="' + esc(String(v).slice(0, 10)) + '"></label>';
   const uq = a => Array.from(new Set(a.filter(Boolean))), D = S.data || {products: [], variants: []};
   const sug = k === 'kategori' ? uq((D.products || []).map(p => p.kategori)) : k === 'ukuran' ? uq((D.variants || []).map(x => x.ukuran).concat(['50 g', '100 g', '250 g', '500 g'])) :
@@ -939,7 +1004,7 @@ const setSnap = () => JSON.stringify(Array.from(document.querySelectorAll('#sf [
 function sDepUpd() { // field yang bergantung: tarif PPN hanya saat PPN aktif; overhead sesuai cara hitung yang dipilih
   const on = k => { const e = document.querySelector('#sf [data-f=' + k + ']'); return e && e.checked; }, m = (document.querySelector('#sf [data-f=metode_overhead]') || {}).value || 'per_unit';
   const set = (id, show) => { const e = $('#' + id); if (e) e.hidden = !show; };
-  set('ppn-x', on('ppn_aktif')); set('oh-unit', m === 'per_unit'); set('oh-batch', m === 'per_batch');
+  set('ppn-x', on('ppn_aktif')); set('hdr-x', on('header_aktif')); set('ftr-x', on('footer_aktif')); set('oh-unit', m === 'per_unit'); set('oh-batch', m === 'per_batch');
   const h = $('#oh-hint'); if (h) h.textContent = m === 'per_batch' ? 'Biaya overhead (gas, listrik, dll.) dihitung tetap setiap sekali produksi, berapa pun hasilnya.' : 'Biaya overhead (gas, listrik, dll.) dihitung per bungkus yang dihasilkan. Contoh: Rp300 × 118 bungkus.';
 }
 function sDirty() { S.dirty = setSnap() !== S.sSnap; const b = $('#ssavebtn'); if (b) b.disabled = !S.dirty; sDepUpd(); }
@@ -967,9 +1032,16 @@ function vSettings() {
   const sw = (k, l, sub, def) => '<label class="sw"><input type="checkbox" data-f="' + k + '"' + (T(s[k] == null || s[k] === '' ? def : s[k]) ? ' checked' : '') + '><span class="sw-t" aria-hidden="true"></span><span class="sw-l"><b>' + l + '</b>' + (sub ? '<small>' + sub + '</small>' : '') + '</span></label>';
   const m = $('#main'); m.className = 'col';
   m.innerHTML = '<button class="chip" data-act="tab" data-t="menu" style="align-self:flex-start">← Menu</button><div id="sf" style="margin-top:8px">' +
-    card('Usaha & Struk', field(['nama_usaha', 'Nama usaha'], s.nama_usaha) + field(['footer_struk', 'Teks bawah struk'], s.footer_struk) + selF('lebar_struk', 'Lebar kertas struk', [['32', '58 mm (32 karakter)'], ['48', '80 mm (48 karakter)']], g('lebar_struk', '32'))) +
-    card('Logo struk', logoCard() + sw('logo_aktif', 'Cetak logo di struk', 'Untuk printer thermal. Struk WhatsApp tetap berupa teks.') + sw('logo_nama', 'Cetak nama usaha di bawah logo', 'Matikan bila logo sudah memuat nama usaha.', true) +
+    card('Usaha & Struk', field(['nama_usaha', 'Nama usaha'], s.nama_usaha) + '<p class="muted" style="margin:-4px 0 8px">Dicetak sebagai judul struk hanya bila logo tidak dipakai.</p>' + selF('lebar_struk', 'Lebar kertas struk', [['32', '58 mm (area cetak 48 mm)'], ['48', '80 mm (area cetak 72 mm)']], g('lebar_struk', '32'))) +
+    card('Logo struk', logoCard() + sw('logo_aktif', 'Cetak logo di struk', 'Untuk printer thermal. Nama usaha tidak dicetak lagi bila logo aktif. Struk WhatsApp tetap berupa teks.') +
       (logoGet() ? '<button class="btn sec sm" data-act="logotest">Uji cetak logo</button>' : '') + '<p class="muted">Ukuran kertas diganti (58 atau 80 mm)? Pilih ulang logo agar ukurannya pas.</p>') +
+    card('Header & footer struk', sw('header_aktif', 'Header: catatan di bawah logo', 'Mis. slogan, alamat, nomor telepon, Instagram. Matikan bila tidak perlu.', true) +
+      '<div id="hdr-x">' + field(['header_struk', 'Isi header', 'area:300'], s.header_struk) + '</div>' +
+      sw('footer_aktif', 'Footer: catatan di bawah struk', 'Mis. ucapan terima kasih. Matikan bila tidak perlu.', true) +
+      '<div id="ftr-x">' + field(['footer_struk', 'Isi footer', 'area:300'], s.footer_struk) + '</div>' +
+      '<p class="muted">Satu baris di sini = satu baris di struk (teks panjang turun baris otomatis). Bungkus baris dengan *bintang* agar tercetak tebal, mis. *TERIMA KASIH*.</p>' +
+      field(['qr_struk', 'Isi QR di bawah struk (opsional)', 'text'], s.qr_struk) + '<p class="muted">Mis. tautan Instagram atau WhatsApp toko. Kosongkan bila tanpa QR. QR memakai fitur bawaan printer; uji dulu karena tidak semua printer mendukung.</p>' +
+      '<button class="btn sec sm" data-act="rcpreview">Pratinjau &amp; uji cetak struk</button><p class="muted">Pratinjau memakai pengaturan yang sudah disimpan.</p>') +
     card('Pajak (PPN)', sw('ppn_aktif', 'Aktifkan PPN', 'Hitung PPN pada setiap transaksi') + '<div id="ppn-x">' + field(['ppn_persen', 'Tarif PPN (%)', 'number'], s.ppn_persen) + sw('ppn_inklusif', 'Harga jual sudah termasuk PPN') + '</div>') +
     card('Stok', sw('blokir_stok_minus', 'Blokir penjualan jika stok kurang', 'Kasir tidak bisa menjual produk yang stoknya habis') + field(['stok_menipis', 'Batas "Menipis" produk jadi (jumlah)', 'number'], g('stok_menipis', '5'))) +
     card('Kantong & Tambahan', '<p class="muted">Produk berkategori "Tambahan" (mis. kantong kresek) muncul di menu pembayaran kasir sebagai pilihan tambahan, bukan di daftar produk.</p>' +
@@ -1070,6 +1142,7 @@ const ACT = {
     return busy('Membuat cadangan dan mereset data…', async () => { try { const r = await api('data.reset', {konfirmasi: 'RESET', pembelian: q('pembelian'), produksi: q('produksi'), biaya: q('biaya'), nol_stok: q('nol')});
       ['hari', 'minggu', 'bulan'].forEach(p => LS.del('dash_' + p)); S.exp = null; S.expLoaded = false; S.day = null; await loadData(); closeSheet(); render(); resetResult(r); } catch (e) { toast(e.message); } }); },
   fotopick: () => { const f = $('#foto_file'); if (f) f.click(); }, fotodel: fotoDel, logopick: () => { if (S.dirty) return toast('Simpan perubahan pengaturan dulu.'); const f = $('#logo_file'); if (f) f.click(); }, logosave: logoSave, logodel: logoDel,
+  rcpreview: () => { if (S.dirty) return toast('Simpan pengaturan dulu agar pratinjau sesuai.'); S.rc = testRc(); sheet('<div class="grab"></div><h2>Pratinjau struk</h2><p class="muted">Contoh transaksi uji, kertas ' + (rcWidth() === 48 ? '80' : '58') + ' mm.</p><pre class="rc" id="rtxt"></pre><div class="row2"><button class="btn dark" data-act="rawbt">Cetak Bluetooth</button><button class="btn sec" data-act="print">Cetak</button></div><button class="btn pri" data-act="close">Tutup</button>'); refreshRc(); },
   logotest: () => { if (!logoOn()) return toast('Aktifkan "Cetak logo di struk" dan simpan pengaturan dulu'); printBT(testRc()); },
   go_diag: () => { S.tab = 'diag'; render(); }, go_arsip: () => { S.tab = 'arsip'; render(); },
   opin_ok: opinOk,

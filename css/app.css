@@ -94,7 +94,7 @@ button.li{border:0;text-align:left;width:100%}.li .r{text-align:right}
 #tot{background:#fff;border-radius:16px;padding:10px 14px;margin:8px 0;box-shadow:var(--sh)}
 .okmark{width:60px;height:60px;border-radius:50%;margin:6px auto 6px;background:var(--ok);color:#fff;display:flex;align-items:center;justify-content:center;animation:pop .4s ease}
 .rc-sum{display:flex;gap:8px;margin:6px 0 10px}.rc-sum>div{flex:1;background:#fff;border-radius:16px;padding:10px 14px;text-align:center;box-shadow:var(--sh)}.rc-sum small{display:block;color:var(--mut)}.rc-sum b{font-size:21px;color:var(--mar)}
-pre.rc{background:#fff;border-radius:12px;padding:12px;font:12px/1.35 ui-monospace,Menlo,monospace;white-space:pre-wrap;overflow:auto;border:1px dashed var(--line)}
+pre.rc{background:#fff;border-radius:12px;padding:12px;font:12px/1.35 ui-monospace,Menlo,"DejaVu Sans Mono",monospace;white-space:pre;overflow:auto;border:1px dashed var(--line);color:#000}pre.rc.w48{font-size:10px}pre.rc b{font-weight:800}.rc .z2{font-size:2em;line-height:1.15;font-weight:800}.rc .qrbox{display:block;width:84px;height:84px;margin:6px auto 0;border:2px solid #000;font:800 20px/80px sans-serif;text-align:center;letter-spacing:1px}textarea.ta{padding:10px 14px;resize:vertical;min-height:76px;line-height:1.35}
 /* menu */
 .profile{display:flex;align-items:center;gap:12px;background:linear-gradient(135deg,var(--mar-l),var(--mar-d));color:#fff;border-radius:20px;padding:14px;margin-bottom:6px;box-shadow:var(--sh)}.profile .muted{color:#f1d9bd}
 .av{width:46px;height:46px;border-radius:50%;background:var(--yel);color:var(--mar);display:flex;align-items:center;justify-content:center;font:800 20px var(--head)}.pi{flex:1;min-width:0}
@@ -133,7 +133,8 @@ body.net #bar{opacity:1}
 .bar{height:8px;background:#F1E3CC;border-radius:4px;margin-top:3px}.bar i{display:block;height:8px;background:linear-gradient(90deg,var(--org),var(--yel-d));border-radius:4px}
 .tw{overflow-x:auto;background:#fff;border-radius:16px;margin:10px 0;box-shadow:var(--sh)}table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:9px 12px;text-align:left;white-space:nowrap;border-bottom:1px solid var(--line)}th{background:#F7EAD6;color:var(--mar)}.n{text-align:right}
 @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}.loader,.sk,.badge.spin::before,#bar::before{animation-duration:2.4s!important;animation-iteration-count:infinite!important}}
-@media print{body *{visibility:hidden}#rtxt,#rtxt *{visibility:visible}#rtxt{position:absolute;left:0;top:0;width:58mm;font-size:10px;background:#fff;border:0}}
+/* cetak browser: 1 karakter = 1,5 mm (font 2,5 mm), jadi 32 karakter = 48 mm (kertas 58, margin 5 mm) dan 48 karakter = 72 mm (kertas 80, margin 4 mm) */
+@media print{body *{visibility:hidden}#rtxt,#rtxt *{visibility:visible}#rtxt{position:absolute;left:0;top:0;box-sizing:border-box;width:58mm;padding:0 5mm;margin:0;font-size:2.5mm;line-height:1.35;background:#fff;border:0;border-radius:0;overflow:visible;color:#000}#rtxt.w48{width:80mm;padding:0 4mm;font-size:2.5mm}}
 /* v1.3: status antrean, tablet (layar terbagi), dialog */
 button.badge{border:0;font-family:inherit;cursor:pointer}
 #qstat{display:none}
