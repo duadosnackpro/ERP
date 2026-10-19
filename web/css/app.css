@@ -1,9 +1,36 @@
-/* Font lokal (tanpa Google Fonts): unduh sekali dengan "sh tools/ambil-font.sh". Bila file belum ada, dipakai font cadangan di --head. */
+/* Font lokal (tanpa Google Fonts): berkas ada di web/fonts/. Pengunduhan ulang: "sh tools/ambil-font.sh" dari folder web/. Bila berkas hilang, dipakai font cadangan di --head. */
 @font-face{font-family:"Baloo 2";font-style:normal;font-weight:600;font-display:swap;src:url(../fonts/baloo2-600.woff2) format("woff2")}
 @font-face{font-family:"Baloo 2";font-style:normal;font-weight:800;font-display:swap;src:url(../fonts/baloo2-800.woff2) format("woff2")}
 /* Duado Snack POS: identitas merek dari logo (marun, kuning, oranye api, krem) */
-:root{--mar:#4A1414;--mar-d:#2E0B0B;--mar-l:#6B2020;--yel:#FFD21F;--yel-d:#F2B600;--org:#F28C1B;--bg:#FBF5EA;--surf:#fff;--ink:#2B1111;--mut:#7A6060;--line:#EADFCC;--ok:#1E7B3A;--warn:#C25E00;--err:#B3261E;--wa:#1FA855;
-  --sh:0 1px 2px rgba(74,20,20,.08),0 6px 18px rgba(74,20,20,.07);--head:"Baloo 2","Arial Rounded MT Bold",system-ui,sans-serif}
+:root{
+  --mar:#4A1414;
+  --mar-d:#2E0B0B;
+  --mar-l:#6B2020;
+  --yel:#FFC928;
+  --yel-d:#FFC928;
+  --org:#E8791A;
+  --bg:#FAF7F2;
+  --surf:#fff;
+  --ink:#2B1111;
+  --mut:#6B5252;
+  --line:#ECE4D8;
+  --ok:#1E7B3A;
+  --warn:#A04A00;
+  --err:#B3261E;
+  --wa:#15803D;
+  --sh:none;
+  --head:"Baloo 2","Arial Rounded MT Bold",system-ui,sans-serif;
+  --s1:4px;
+  --s2:8px;
+  --s3:12px;
+  --s4:16px;
+  --s5:24px;
+  --r-sm:12px;
+  --r-md:16px;
+  --r-lg:22px;
+  --sh-sm:none;
+  --sh-md:none;
+}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent;overscroll-behavior:none}
 button{font:inherit;color:inherit}
@@ -169,7 +196,7 @@ button.badge{border:0;font-family:inherit;cursor:pointer}
 
 /* ===== v1.4.0: penyempurnaan UI/UX ===== */
 /* Token: skala spasi 4/8/12/16/24, radius dan bayangan seragam, kontras >= 4.5:1 */
-:root{--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--r-sm:12px;--r-md:16px;--r-lg:24px;--sh-sm:0 1px 2px rgba(74,20,20,.08);--sh-md:0 1px 2px rgba(74,20,20,.08),0 6px 18px rgba(74,20,20,.07);--mut:#6B5252;--warn:#A04A00;--wa:#15803D}
+
 .li,.card-s,.kpi,.mi,.paybox,#tot,.card.pc,.set-card{border-radius:var(--r-md);box-shadow:var(--sh-md)}
 .li{padding:var(--s3) var(--s4);margin-bottom:var(--s2)}.card-s{padding:var(--s4);margin-bottom:var(--s3)}.kpi{padding:var(--s3) var(--s4)}.mi{padding:var(--s3) var(--s4);margin-bottom:var(--s2)}
 .kgrid{gap:var(--s3)}.grid{gap:var(--s3);grid-auto-rows:1fr}.grp{margin-bottom:var(--s4)}.sheet{border-radius:var(--r-lg) var(--r-lg) 0 0;padding:var(--s2) var(--s4) calc(var(--s4) + env(safe-area-inset-bottom))}
@@ -251,7 +278,7 @@ main.col{display:flex;flex-direction:column;padding-bottom:0}main.col #sf{flex:1
 .set-card .row2{margin-bottom:6px}
 
 /* ===== v1.9.0 (tahap 1): penyegaran tampilan. Foto produk hanya di Kasir (tahap 2 mengisi foto asli) ===== */
-:root{--bg:#FAF7F2;--line:#ECE4D8;--yel:#FFC928;--yel-d:#FFC928;--org:#E8791A;--sh:none;--sh-md:none;--sh-sm:none;--r-md:16px;--r-lg:22px}
+
 html,body,#app{background:var(--bg)}
 /* kepala: satu baris, tanpa gradien dan garis aksen */
 .top{background:var(--bg);color:var(--ink);padding:calc(8px + env(safe-area-inset-top)) 16px 8px}.accent{display:none}
@@ -300,3 +327,5 @@ html,body,#app{background:var(--bg)}
 .stack{display:flex;height:12px;border-radius:6px;overflow:hidden;gap:2px;margin:8px 0 12px}.stack i{display:block;min-width:2px}
 .bar{height:6px}.bar i{height:6px;background:var(--org)}
 .fbox{display:flex;gap:12px;align-items:center;margin:4px 0 12px}.fprev.ph{width:88px;flex:none;border-radius:14px}.fprev .ini{font-size:34px}.fact{display:flex;flex-direction:column;gap:6px;min-width:0}.fact .muted{font-size:12px}
+/* v1.9.7: judul login. Aturan .wordmark di atas (marun) mengenai juga judul di latar marun sehingga hampir tak terbaca (kontras ~1:1); di sini dipulihkan: kuning terang di atas marun (kontras > 9:1). */
+.lg-hero .wordmark{color:var(--yel);text-shadow:0 2px 0 rgba(0,0,0,.35);letter-spacing:.6px}

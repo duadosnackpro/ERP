@@ -1,0 +1,35 @@
+name: CI
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package.json
+      - name: Pasang dependensi
+        run: if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - name: Pasang Chromium untuk uji klien
+        run: npx playwright install --with-deps chromium
+      - name: Sumber app.js sesuai hasil bangun
+        run: npm run build:check
+      - name: Lint
+        run: npm run lint
+      - name: Tipe (ratchet)
+        run: npm run typecheck
+      - name: Pemeriksa rilis (versi, berkas, CSP, manifest)
+        run: npm run test:release
+      - name: Uji backend (versi data, hash PIN)
+        run: npm run test:be
+      - name: Uji klien (Chromium sungguhan)
+        run: npm run test:fe

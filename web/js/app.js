@@ -576,10 +576,14 @@ async function printBT(rc) {
   if (isIOS()) return iosHelp();
   toast('Bluetooth tidak tersedia di browser ini. Memakai cetak browser.'); printBrowser();
 }
+const PG = {rule: null};
 function printBrowser() {
   const d = document.querySelector('#rtxt'); if (d && d.closest('details')) d.closest('details').open = true;
-  let st = document.getElementById('pgsz'); if (!st) { st = document.createElement('style'); st.id = 'pgsz'; document.head.appendChild(st); }
-  st.textContent = '@page{size:' + (rcWidth() === 48 ? 80 : 58) + 'mm auto;margin:0}'; // ukuran kertas mengikuti pengaturan
+  try { // @page lewat CSSOM pada app.css (diizinkan CSP; elemen <style> sisipan tidak)
+    const ss = Array.from(document.styleSheets).find(x => /css\/app\.css/.test(x.href || '')) || document.styleSheets[0];
+    if (PG.rule) { const i = Array.prototype.indexOf.call(ss.cssRules, PG.rule); if (i >= 0) ss.deleteRule(i); }
+    PG.rule = ss.cssRules[ss.insertRule('@page{size:' + (rcWidth() === 48 ? 80 : 58) + 'mm auto;margin:0}', ss.cssRules.length)]; // ukuran kertas mengikuti pengaturan
+  } catch (e) { logErr(e, 'cetak'); }
   setTimeout(() => window.print(), 60);
 }
 function waSend(rc, number) {
@@ -699,7 +703,7 @@ const TILE = [['#E0A23C', '#B8741E'], ['#E07B3C', '#9E4514'], ['#C9482A', '#8A24
 const tileOf = v => { let h = 0; String(v.product_id || v.id).split('').forEach(c => { h = (h * 31 + c.charCodeAt(0)) >>> 0; }); return TILE[h % TILE.length]; };
 /* ===== v1.9.1 (tahap 2): foto produk. Foto = satu per PRODUK (semua varian memakainya), disimpan di Drive; products.foto_url menyimpan alamatnya ===== */
 const fotoOf = p => p && /^https:\/\//.test(p.foto_url || '') ? p.foto_url : '';
-const photoInner = (p, name) => '<span class="ini">' + esc(String(name).trim().charAt(0).toUpperCase()) + '</span>' + (fotoOf(p) ? '<img src="' + esc(fotoOf(p)) + '" alt="" crossorigin="anonymous" referrerpolicy="no-referrer" decoding="async" loading="lazy" onerror="fotoErr(this)">' : '');
+const photoInner = (p, name) => '<span class="ini">' + esc(String(name).trim().charAt(0).toUpperCase()) + '</span>' + (fotoOf(p) ? '<img src="' + esc(fotoOf(p)) + '" alt="" crossorigin="anonymous" referrerpolicy="no-referrer" decoding="async" loading="lazy" data-foto="1">' : '');
 const photoHtml = v => photoInner(pById(v.product_id), vName(v));
 function fotoErr(im) { // gagal muat: sekali coba tanpa CORS (hanya online, tidak masuk cache); gagal lagi = buang gambar, huruf awal di bawahnya tampil
   if (!im.dataset.r && im.hasAttribute('crossorigin')) { im.dataset.r = '1'; im.removeAttribute('crossorigin'); im.src = im.src; } else im.remove();
@@ -752,6 +756,7 @@ async function fotoDel() {
   const pid = S.fotoFor; if (!pid || !confirm('Hapus foto produk ini?')) return;
   return busy('Menghapus foto…', async () => { try { await api('produk.foto', {product_id: pid, data: ''}); fotoApply(pid, ''); toast('Foto dihapus'); } catch (e) { toast(e.message); } });
 }
+document.addEventListener('error', ev => { const t = ev.target; if (t && t.tagName === 'IMG' && t.hasAttribute('data-foto')) fotoErr(t); }, true); // error gambar tidak menggelembung: ditangkap di fase capture (CSP v1.9.7 melarang onerror inline; sebelumnya fotoErr juga tidak terjangkau dari atribut)
 let fotoBusy = false;
 async function fotoWarm() { // simpan semua foto katalog ke cache offline (satu per satu, ringan) dan buang yang sudah tidak dipakai
   if (fotoBusy || !S.data || !window.caches || navigator.onLine === false) return; fotoBusy = true;

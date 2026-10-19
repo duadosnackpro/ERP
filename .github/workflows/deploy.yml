@@ -1,0 +1,59 @@
+# Rilis otomatis ke GitHub Pages: tidak ada lagi unggah manual. Push ke main -> uji -> rakit -> terbitkan -> verifikasi versi yang tayang.
+# Prasyarat satu kali (Settings repo):
+#   1. Pages > Build and deployment > Source = "GitHub Actions"
+#   2. Settings > Secrets and variables > Actions > tab Variables > New repository variable: API_URL = alamat Web App Apps Script Anda (berakhiran /exec)
+name: Deploy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Rakit situs (config.js diisi API_URL dari variabel repo)
+        env:
+          API_URL: ${{ vars.API_URL }}
+        run: |
+          set -e
+          [ -n "$API_URL" ] || { echo "::error::Variabel repo API_URL belum diisi (Settings > Secrets and variables > Actions > Variables)"; exit 1; }
+          echo "$API_URL" | grep -Eq '^https://script\.google\.com/(a/macros/[^/]+|macros)/s/[A-Za-z0-9_-]+/exec$' || { echo "::error::API_URL bukan alamat Web App Apps Script yang valid (https://script.google.com/macros/s/.../exec)"; exit 1; }
+          rm -rf _site && cp -r web _site && rm -rf _site/tools
+          VER=$(node -p "require('fs').readFileSync('web/js/config.js','utf8').match(/VERSION:\s*'([^']+)'/)[1]")
+          printf "window.CONFIG = {\n  API_URL: '%s',\n  VERSION: '%s'\n};\n" "$API_URL" "$VER" > _site/js/config.js
+          echo "VERSION=$VER" >> "$GITHUB_ENV"
+      - name: Periksa isi paket yang akan terbit
+        run: WEB_SRC=_site node tests/release_check.js
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Verifikasi versi yang tayang (sw.js dan config.js)
+        env:
+          URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          for i in 1 2 3 4 5 6; do
+            SW=$(curl -fsS -H 'Cache-Control: no-cache' "${URL}sw.js?cb=$RANDOM" || true); CF=$(curl -fsS -H 'Cache-Control: no-cache' "${URL}js/config.js?cb=$RANDOM" || true)
+            if echo "$SW" | grep -q "duado-v$VERSION'" && echo "$CF" | grep -q "'$VERSION'"; then echo "Tayang: versi $VERSION"; exit 0; fi
+            echo "Belum tayang (percobaan $i), tunggu..."; sleep 10
+          done
+          echo "::error::Versi $VERSION belum terlihat di $URL setelah 60 detik"; exit 1

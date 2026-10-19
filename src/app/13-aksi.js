@@ -1,0 +1,91 @@
+/* ---------- Aksi (event delegation) ---------- */
+const ACT = {
+  login: doLogin, logout: confirmLogout, close: closeSheet, cart: cartSheet, pay: pay,
+  hideout: el => { S.hideOut = !!el.checked; LS.set('hideOut', S.hideOut); grid(); }, showout: () => { S.hideOut = false; LS.set('hideOut', false); vKasir(); },
+  rday: el => { const p = el.dataset.p; if (p === 'today') { S.day = today(); S.rcustom = false; } else if (p === 'yday') { S.day = addDays(today(), -1); S.rcustom = false; } else S.rcustom = true; vRiwayat(); },
+  scat: el => { S.scat = el.dataset.c; vStok(); },
+  install: async () => { const ev = S.installEv; if (!ev) return; try { ev.prompt(); await ev.userChoice; } catch (e) {} S.installEv = null; if (S.tab === 'menu') vMenu(); },
+  tab: el => { S.tab = el.dataset.t; render(); },
+  chan: el => { S.ch = el.dataset.c; LS.set('ch', S.ch); vKasir(); cartbar(); },
+  cat: el => { S.cat = el.dataset.c; vKasir(); },
+  add: el => { if (el.classList.contains('off')) { const v = vById(el.dataset.v); return toast(priceOf(el.dataset.v, S.ch) == null ? 'Harga belum diatur untuk channel ini' : 'Stok habis'); } addToCart(el.dataset.v); },
+  inc1: el => addToCart(el.dataset.v), dec1: el => dropFromCart(el.dataset.v),
+  inc: el => { const l = S.cart[el.dataset.i]; if (!l) return; const st = Number(vById(l.v).stok) || 0; if (T(cfg('blokir_stok_minus')) && l.qty + 1 > st) return toast('Stok tidak cukup'); l.qty++; saveCart(); cartLines(); addonsRender(); cashBox(); upd(); updCard(l.v); buzz(); },
+  dec: el => { const l = S.cart[el.dataset.i]; if (!l) return; const id = l.v; l.qty--; if (l.qty <= 0) S.cart.splice(el.dataset.i, 1); saveCart(); if (!S.cart.length && !isWide()) closeSheet(); cartLines(); addonsRender(); cashBox(); upd(); updCard(id); },
+  metode: el => { S.metode = el.dataset.m; LS.set('metode', S.metode); const c = $('#mchips'); if (c) c.innerHTML = methodChips(); cashBox(); upd(); },
+  qk: el => { S.terima = el.dataset.n; cashBox(); upd(); },
+  wa: () => waSend(S.rc, ($('#wa') || {}).value), rawbt: () => printBT(S.rc), print: () => printBrowser(), share: () => shareRc(S.rc), copyrc: () => copyText(receiptText(S.rc)),
+  addonnew: () => { if (S.dirty) return toast('Simpan perubahan pengaturan dulu.'); addonSheet(); },
+  addonsave: () => { const n = $('#ad_n').value.trim(), h = dnum($('#ad_h').value), c = dnum($('#ad_c').value), st = dnum($('#ad_s').value); if (!n) return toast('Isi nama produk tambahan'); if (!(h >= 0)) return toast('Harga jual tidak valid');
+    return busy('Membuat produk tambahan…', async () => { try { await api('addon.create', {nama: n, harga: h, hpp: isNaN(c) ? 0 : c, stok: isNaN(st) ? 0 : st}); await loadData(); closeSheet(); render(); toast('Produk tambahan dibuat'); } catch (e) { toast(e.message); } }); },
+  resetopen: () => { if (S.dirty) return toast('Simpan perubahan pengaturan dulu.'); resetSheet(); },
+  resetgo: () => { const q = k => { const e = document.querySelector('#sheet [data-rs=' + k + ']'); return !!(e && e.checked); };
+    return busy('Membuat cadangan dan mereset data…', async () => { try { const r = await api('data.reset', {konfirmasi: 'RESET', pembelian: q('pembelian'), produksi: q('produksi'), biaya: q('biaya'), nol_stok: q('nol')});
+      ['hari', 'minggu', 'bulan'].forEach(p => LS.del('dash_' + p)); S.exp = null; S.expLoaded = false; S.day = null; await loadData(); closeSheet(); render(); resetResult(r); } catch (e) { toast(e.message); } }); },
+  fotopick: () => { const f = $('#foto_file'); if (f) f.click(); }, fotodel: fotoDel, logopick: () => { if (S.dirty) return toast('Simpan perubahan pengaturan dulu.'); const f = $('#logo_file'); if (f) f.click(); }, logosave: logoSave, logodel: logoDel,
+  rcpreview: () => { if (S.dirty) return toast('Simpan pengaturan dulu agar pratinjau sesuai.'); S.rc = testRc(); sheet('<div class="grab"></div><h2>Pratinjau struk</h2><p class="muted">Contoh transaksi uji, kertas ' + (rcWidth() === 48 ? '80' : '58') + ' mm.</p><pre class="rc" id="rtxt"></pre><div class="row2"><button class="btn dark" data-act="rawbt">Cetak Bluetooth</button><button class="btn sec" data-act="print">Cetak</button></div><button class="btn pri" data-act="close">Tutup</button>'); refreshRc(); },
+  logotest: () => { if (!logoOn()) return toast('Aktifkan "Cetak logo di struk" dan simpan pengaturan dulu'); printBT(testRc()); },
+  go_diag: () => { S.tab = 'diag'; render(); }, go_arsip: () => { S.tab = 'arsip'; render(); },
+  opin_ok: opinOk,
+  qauth: async el => { const q = S.queue[el.dataset.i]; if (!q) return; const kind = /^Diskon/.test(q.error || '') ? 'diskon' : 'selisih';
+    const tok = await askOwner(q.error + ' Owner dapat menyetujui dengan PIN.', kind, q.rid, kind === 'diskon' ? q.payload.diskon : 0);
+    if (!tok) return queueSheet(); q.payload.override = Object.assign({}, q.payload.override, {[kind]: tok}); q.status = 'pending'; q.state = 'waiting'; q.error = ''; LS.set('queue', S.queue); flush(); queueSheet(); },
+  uunlock: async el => { try { await api('user.unlock', {id: el.dataset.id}); toast('Kunci akun dibuka'); closeSheet(); vUsers(); } catch (e) { toast(e.message); } },
+  go_tutup: () => { S.tab = 'tutup'; render(); }, tclose: () => tutupSimpan(),
+  queue: queueSheet, qnow: () => { flush(); setTimeout(() => { if (S.qopen) queueSheet(); }, 700); },
+  btdirect: el => { LS.set('btdirect', !!el.checked); toast(el.checked ? 'Cetak langsung via BLE aktif' : 'Cetak lewat RawBT (Android)'); },
+  btpick: async () => { try { await btConnect(true); toast('Printer dipilih: ' + (BT.dev.name || 'tanpa nama')); vDiag(); } catch (e) { toast(e && e.name === 'NotFoundError' ? 'Pemilihan printer dibatalkan' : 'Gagal: ' + (e.message || e)); } },
+  skugen: el => { const f = {}; document.querySelectorAll('#sheet [data-f]').forEach(e => f[e.dataset.f] = e.value); if (!f.product_id) return toast('Pilih produk dulu'); const i = document.querySelector('#sheet [data-f=sku]'); if (i) i.value = genSkuLocal(f, el.dataset.id || ''); },
+  dtwa: () => waSend(testRc(), ''), dtbt: () => printBT(testRc()), dtshare: () => shareRc(testRc()),
+  dping: async () => { const el = $('#dres'); el.textContent = 'Menguji…'; const t0 = performance.now(); try { await api('ping', {}, {silent: true}); el.textContent = 'Berhasil: ' + Math.round(performance.now() - t0) + ' ms'; } catch (e) { el.textContent = 'Gagal: ' + e.message; logErr(e, 'ping'); } },
+  dcopy: () => copyText(JSON.stringify({v: C.VERSION, ua: navigator.userAgent, online: navigator.onLine, queue: S.queue.length, penyimpanan: Store.mode(), err: LS.get('errlog', [])}, null, 1), 'Log disalin. Tempel untuk dikirim.'),
+  dclear: () => { LS.set('errlog', []); vDiag(); toast('Catatan kesalahan dihapus'); },
+  copyurl: () => copyText(location.href.split('#')[0], 'Alamat aplikasi disalin.'),
+  qretry: el => { const q = S.queue[el.dataset.i]; if (q) { q.status = 'pending'; q.state = 'waiting'; q.error = ''; } LS.set('queue', S.queue); qrefresh(); flush(); },
+  qdel: async el => {
+    const q = S.queue[el.dataset.i]; if (!q) return;
+    if (!navigator.onLine) return toast('Hubungkan internet dulu: penghapusan dicatat ke server agar ada jejaknya');
+    const alasan = prompt('Alasan menghapus transaksi ini (wajib). Uang pelanggan sudah diterima? Tulis di sini.'); if (alasan === null) return; if (alasan.trim().length < 3) return toast('Alasan wajib diisi');
+    try { await api('sale.reject_log', {request_id: q.rid, total: q.total, metode: q.payload.metode_bayar, channel: q.ch, waktu: fmtDT(q.ts), error: q.error || '', alasan: alasan.trim(), items: q.payload.items.map(it => { const v = vById(it.variant_id); return {sku: v ? v.sku : it.variant_id, qty: it.qty}; })}); }
+    catch (e) { return toast(e.auth ? 'Sesi berakhir, masuk lagi' : e.server ? e.message : 'Tidak ada koneksi; coba lagi'); }
+    const k = S.queue.indexOf(q); if (k < 0) return; S.queue.splice(k, 1); q.payload.items.forEach(it => { const v = vById(it.variant_id); if (v) v.stok = r6((Number(v.stok) || 0) + it.qty); }); LS.set('queue', S.queue); LS.set('data', S.data); badge(); qrefresh(); toast('Dihapus dan dicatat di server');
+  },
+  retur: el => returOpen(el.dataset.id), retur_ok: () => returGo(),
+  retur_all: () => { document.querySelectorAll('#sheet [data-rv]').forEach(e => { e.value = e.max; }); },
+  ohsaran: async () => { const el = $('#oh-saran'); try { const r = await api('overhead.saran', {}); if (r.saran_per_unit == null) { if (el) el.textContent = r.pesan || 'Belum bisa dihitung.'; return; } if (el) el.textContent = 'Bulan ' + r.bulan + ': biaya ' + rp(r.biaya) + ' dibagi ' + num(r.unit) + ' unit = ' + rp(r.saran_per_unit) + ' per bungkus. Diisikan ke kolom di atas; tekan Simpan pengaturan.'; const f = document.querySelector('#sf [data-f="overhead_per_unit"]'), m = document.querySelector('#sf [data-f="metode_overhead"]'); if (m && m.value !== 'per_unit') { m.value = 'per_unit'; m.dispatchEvent(new Event('change', {bubbles: true})); } if (f) { f.value = r.saran_per_unit; f.dispatchEvent(new Event('input', {bubbles: true})); } } catch (e) { toast(e.message); } },
+  stab: el => { S.stab = el.dataset.s; S.scat = 'Semua'; S.sq = ''; vStok(); },
+  adj: el => adjSheet(el.dataset.t, el.dataset.id), adjsave: el => adjSave(el.dataset.t, el.dataset.id),
+  pbopen: pbSheet, pbdel: el => { S.pb.items.splice(el.dataset.i, 1); pbSheet(); }, pbsave: pbSave,
+  pbadd: () => { const q = dnum($('#pb_q').value), h = dnum($('#pb_h').value), id = $('#pb_m').value; if (!id || !(q > 0) || !(h >= 0) || $('#pb_h').value === '') return toast('Isi jumlah dan harga'); S.pb.items.push({id: id, qty: q, harga: h}); pbSheet(); },
+  go_master: () => { S.tab = 'master'; render(); }, go_riwayat: () => { S.tab = 'riwayat'; render(); }, go_laporan: () => { S.tab = 'laporan'; render(); }, go_shopee: () => { S.tab = 'shopee'; render(); }, go_resep: () => { S.tab = 'resep'; render(); }, go_cek: () => { S.tab = 'cek'; render(); }, go_users: () => { S.tab = 'users'; render(); }, go_settings: () => { S.tab = 'settings'; render(); },
+  mt: el => { S.mt = el.dataset.k; vMaster(); }, medit: el => meditSheet(el.dataset.id), msave: el => mSave(el.dataset.id), mdel: el => mDel(el.dataset.id),
+  uedit: el => ueditSheet(el.dataset.id), usave: el => uSave(el.dataset.id), ssave: sSave,
+  sync: () => busy('Memperbarui data…', async () => { try {
+    if (own()) { await api('sistem.refresh', {}); await loadData(); lastChk = Date.now(); render(); await flush(); toast('Data diperbarui'); } // Owner: muat ulang penuh dan bersihkan cache server (setelah mengedit spreadsheet langsung)
+    else { const r = await verSync(0); if (r === null) throw new Error('Tidak ada koneksi ke server'); if (r) redrawFor(r); await flush(); toast(r ? 'Data diperbarui' : 'Sudah yang terbaru'); } // Kasir: hanya memuat bila ada data baru
+  } catch (e) { if (e.auth) softLogout(); else toast('Gagal memperbarui: ' + e.message); } })
+};
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]'), a = el && el.dataset.act; if (!el || !ACT[a]) return;
+  if (S.dirty && S.tab === 'settings' && (a === 'tab' || a === 'logout' || a === 'sync' || /^go_/.test(a))) { if (!confirm('Perubahan pengaturan belum disimpan. Keluar tanpa menyimpan?')) return; S.dirty = false; }
+  ACT[a](el);
+});
+document.addEventListener('input', e => { if (S.tab === 'settings' && e.target.closest && e.target.closest('#sf')) sDirty(); const d = e.target.dataset; if (d && d.rs === 'c') { const b = $('#rsbtn'); if (b) b.disabled = !(e.target.value.trim() === 'RESET' && !S.queue.length); } });
+document.addEventListener('change', e => { if (e.target.id === 'foto_file') { const f = e.target.files && e.target.files[0]; e.target.value = ''; fotoLoad(f); return; } if (e.target.id === 'logo_file') { const f = e.target.files && e.target.files[0]; e.target.value = ''; logoLoad(f); return; } if (S.tab === 'settings' && e.target.closest && e.target.closest('#sf')) sDirty(); });
+document.addEventListener('input', e => { if (e.target.dataset && e.target.dataset.lg) logoEdit(e.target); });
+window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.installEv = e; if (S.tab === 'menu' && S.data) vMenu(); });
+window.addEventListener('appinstalled', () => { S.installEv = null; if (S.tab === 'menu' && S.data) vMenu(); });
+window.addEventListener('resize', () => initFades());
+document.addEventListener('input', e => {
+  const k = e.target.dataset && e.target.dataset.in; if (!k) return; let v = e.target.value;
+  if (k === 'q') { S.q = v; return grid(); }
+  if (k === 'sq') { S.sq = v; return stokList(); }
+  if (k === 'pbsup') { S.pb.sup = v; return; }
+  if (k === 'pbongkir') { S.pb.ongkir = v.replace(/\D/g, ''); return; }
+  if (k === 'catatan') { S.catatan = v; return; }
+  if (k === 'diskon' || k === 'terima') { v = v.replace(/\D/g, ''); S[k] = v; return upd(); }
+});
+document.addEventListener('change', e => { if (e.target.dataset && e.target.dataset.chg === 'day') { S.day = e.target.value; vRiwayat(); } });
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && $('#lp') && document.activeElement === $('#lp')) doLogin(); });
+
