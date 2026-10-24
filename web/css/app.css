@@ -329,3 +329,9 @@ html,body,#app{background:var(--bg)}
 .fbox{display:flex;gap:12px;align-items:center;margin:4px 0 12px}.fprev.ph{width:88px;flex:none;border-radius:14px}.fprev .ini{font-size:34px}.fact{display:flex;flex-direction:column;gap:6px;min-width:0}.fact .muted{font-size:12px}
 /* v1.9.7: judul login. Aturan .wordmark di atas (marun) mengenai juga judul di latar marun sehingga hampir tak terbaca (kontras ~1:1); di sini dipulihkan: kuning terang di atas marun (kontras > 9:1). */
 .lg-hero .wordmark{color:var(--yel);text-shadow:0 2px 0 rgba(0,0,0,.35);letter-spacing:.6px}
+/* v1.9.8: daftar bertahap dan visualizer antrean */
+.lmore{grid-column:1/-1;margin:10px 0}
+.qwarn{background:#FDECEC;color:var(--err);border:1.5px solid var(--err);border-radius:14px;padding:10px 12px;margin:4px 0 10px;font-size:14px;line-height:1.4}
+.qitems{font-size:13px;margin:4px 0;color:var(--ink,#2b2320)}
+.qwhy{background:#FFF6E0;border-radius:10px;padding:8px 10px;margin:6px 0;font-size:13px;line-height:1.4}
+#grid,#rlist,#cl{overflow-anchor:none} /* daftar digambar ulang seluruhnya: tanpa ini browser menahan posisi gulir di dasar daftar baru */

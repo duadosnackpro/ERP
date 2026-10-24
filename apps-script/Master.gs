@@ -32,7 +32,10 @@ function validate_(t, d) {
   if (t === 'channels') { if (blank_(d.nama)) throw new Error('Nama channel wajib diisi.'); if (!(n('fee_persen') >= 0 && n('fee_persen') <= 100)) throw new Error('Fee persen harus 0-100.'); if (!blank_(d.basis_fee) && ['total', 'subtotal', 'omzet'].indexOf(d.basis_fee) < 0) throw new Error('Basis fee harus total, subtotal, atau omzet.'); }
   if (t === 'expenses' && !(n('nominal') > 0)) throw new Error('Nominal biaya harus lebih dari 0.');
 }
-function removeSafe_(t, id, uid) { // soft delete dengan pengaman: tidak boleh menghapus yang masih punya stok atau masih dipakai
+function removeSafe_(t, id, uid) { // v1.9.8: seluruh pemeriksaan + penghapusan dalam SATU kunci (sebelumnya periksa stok di luar kunci, hapus di dalam: produksi/pembelian bisa menyela di antaranya)
+  return withLock_(() => removeSafeCore_(t, id, uid));
+}
+function removeSafeCore_(t, id, uid) { // soft delete dengan pengaman: tidak boleh menghapus yang masih punya stok atau masih dipakai
   const act = r => String(r.aktif) !== 'false';
   if (t === 'products') {
     const vs = readAll_('product_variants').filter(v => act(v) && v.product_id === id), bad = vs.filter(v => num_(v.stok) !== 0);

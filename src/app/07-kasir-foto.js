@@ -103,12 +103,14 @@ function grid() {
   const base = d.variants.filter(v => !isAddon(v) && (S.cat === 'Semua' || String((pById(v.product_id) || {}).kategori) === S.cat) && (!q || (vName(v) + ' ' + vSub(v) + ' ' + v.sku).toLowerCase().indexOf(q) >= 0));
   let list = S.hideOut ? base.filter(avail) : base;
   list = list.map((v, i) => [v, i]).sort((x, y) => (avail(y[0]) - avail(x[0])) || (x[1] - y[1])).map(x => x[0]); // tersedia di atas, habis di bawah, urutan asli dijaga
+  const sig = S.cat + '|' + q + '|' + S.hideOut; if (S.gsig !== sig) { S.gsig = sig; delete LIM.grid; const mn = $('#main'); if (mn) mn.scrollTop = 0; } // filter berganti: mulai dari halaman pertama dan dari atas (tanpa ini browser menahan posisi di dasar daftar baru dan sentinel memuat berantai sampai semua baris)
   const kc = $('#kcount'); if (kc) kc.textContent = list.length + ' produk' + (S.hideOut && base.length > list.length ? ' · ' + (base.length - list.length) + ' habis disembunyikan' : '');
-  $('#grid').innerHTML = list.map(v => {
+  $('#grid').innerHTML = (list.slice(0, lim('grid')).map(v => {
     const off = isOff(v), n = heatN(v.level_pedas);
     return '<div class="card pc h' + (n < 0 ? 'x' : n) + (off ? ' off' : '') + (cartQty(v.id) ? ' in' : '') + '" data-act="add" data-v="' + esc(v.id) + '" role="button" tabindex="0" aria-disabled="' + (off ? 'true' : 'false') + '">' + cardHtml(v) + '</div>';
-  }).join('') || (S.hideOut && base.length ? emptyState('stok', 'Semua produk habis', 'Matikan "Sembunyikan yang habis" untuk melihat daftar lengkap.', '<button class="btn sec" data-act="showout">Tampilkan yang habis</button>') :
+  }).join('') + moreBtn('grid', list.length)) || (S.hideOut && base.length ? emptyState('stok', 'Semua produk habis', 'Matikan "Sembunyikan yang habis" untuk melihat daftar lengkap.', '<button class="btn sec" data-act="showout">Tampilkan yang habis</button>') :
     own() ? emptyState('stok', 'Belum ada produk untuk dijual', 'Produk harus punya varian dan harga agar tampil di sini.', '<button class="btn pri" data-act="go_cek">Periksa data</button>') : emptyState('stok', 'Belum ada produk', 'Tidak ada produk di kategori ini.', ''));
+  watchMore();
 }
 function updCard(id) { // perbarui satu kartu saja, tanpa menggambar ulang seluruh daftar
   const el = document.querySelector('#grid .card[data-v="' + id + '"]'), v = vById(id); if (!el || !v) return;
@@ -129,7 +131,7 @@ function addToCart(id) {
   if (priceOf(id, S.ch) == null) return toast('Harga belum diatur untuk channel ini');
   const l = S.cart.find(x => x.v === id), q = (l ? l.qty : 0) + 1, st = Number(v.stok) || 0;
   if (T(cfg('blokir_stok_minus')) && q > st) return toast(st > 0 ? 'Stok tidak cukup' : 'Stok habis');
-  if (l) l.qty = q; else S.cart.push({v: id, qty: 1});
+  if (l) l.qty = q; else { S.cart.push({v: id, qty: 1}); if (S.cart.length > lim('cart')) LIM.cart = S.cart.length; } // baris baru selalu terlihat
   saveCart(); updCard(id); syncCart(); buzz();
 }
 function dropFromCart(id) {
@@ -140,9 +142,9 @@ const payMethods = () => ['tunai', 'transfer', 'qris'].filter(m => { const v = c
 const methodChips = () => payMethods().map(m => '<button class="chip ' + (S.metode === m ? 'on' : '') + '" data-act="metode" data-m="' + m + '">' + m.toUpperCase() + '</button>').join('');
 function cartLines() {
   const el = $('#cl'); if (!el) return;
-  if (!S.cart.length) { el.innerHTML = '<div class="cp-empty">' + svg('kasir', 34) + '<p>Ketuk produk di sebelah kiri untuk menambahkannya ke pesanan.</p></div>'; return; }
-  el.innerHTML = S.cart.map((l, i) => { const v = vById(l.v), p = priceOf(l.v, S.ch) || 0;
-    return '<div class="li cl-i"><div class="cl-n"><b>' + esc(vName(v)) + '</b><div class="muted">' + esc([vSub(v), rp(p)].filter(Boolean).join(' · ')) + '</div></div><div class="qty"><button data-act="dec" data-i="' + i + '" aria-label="Kurangi">−</button><span>' + l.qty + '</span><button data-act="inc" data-i="' + i + '" aria-label="Tambah">+</button></div><b class="cl-t">' + rp(p * l.qty) + '</b></div>'; }).join('');
+  if (!S.cart.length) { delete LIM.cart; el.innerHTML = '<div class="cp-empty">' + svg('kasir', 34) + '<p>Ketuk produk di sebelah kiri untuk menambahkannya ke pesanan.</p></div>'; return; }
+  el.innerHTML = S.cart.slice(0, lim('cart')).map((l, i) => { const v = vById(l.v), p = priceOf(l.v, S.ch) || 0;
+    return '<div class="li cl-i"><div class="cl-n"><b>' + esc(vName(v)) + '</b><div class="muted">' + esc([vSub(v), rp(p)].filter(Boolean).join(' · ')) + '</div></div><div class="qty"><button data-act="dec" data-i="' + i + '" aria-label="Kurangi">−</button><span>' + l.qty + '</span><button data-act="inc" data-i="' + i + '" aria-label="Tambah">+</button></div><b class="cl-t">' + rp(p * l.qty) + '</b></div>'; }).join('') + moreBtn('cart', S.cart.length); watchMore();
 }
 function cashBox() {
   const el = $('#cashbox'); if (!el) return;

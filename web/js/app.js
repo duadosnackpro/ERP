@@ -66,9 +66,20 @@ const chName = id => { const c = S.data.channels.find(c => c.id === id); return 
 const p2 = n => ('0' + n).slice(-2);
 const fmtDT = d => { d = new Date(d); return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()); };
 const today = () => fmtDT(new Date()).slice(0, 10);
+/* Daftar bertahap (v1.9.8): DOM hanya memuat sebagian baris; sisanya muncul saat digulir mendekati ujung (IntersectionObserver) atau lewat tombol. Mencegah layar macet pada >100 baris.
+   LIM menyimpan jumlah baris yang sedang ditampilkan per daftar; bertambah satu halaman tiap kali, dan di-reset pemanggil saat filter/hari berganti. */
+const PGN = {grid: 60, cart: 40, hist: 50, q: 30}, LIM = {}; let moreIO = null;
+const lim = k => LIM[k] || PGN[k];
+function moreBtn(k, total) { const n = total - lim(k); return n > 0 ? '<button class="btn sec lmore" data-act="more" data-k="' + k + '">Tampilkan ' + Math.min(n, PGN[k]) + ' lagi (sisa ' + n + ')</button>' : ''; }
+function watchMore() {
+  if (moreIO) { moreIO.disconnect(); moreIO = null; }
+  const els = document.querySelectorAll('.lmore'); if (!els.length || !window.IntersectionObserver) return; // tanpa IntersectionObserver tombol tetap bisa diketuk
+  moreIO = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting && e.target.isConnected) { moreIO.unobserve(e.target); /** @type {HTMLElement} */ (e.target).click(); } }), {rootMargin: '300px'});
+  els.forEach(e => moreIO.observe(e));
+}
 function toast(m) { const t = $('#toast'); t.textContent = m; t.className = 'show'; clearTimeout(toast.t); toast.t = setTimeout(() => t.className = '', 2600); }
 function sheet(html) { const b = $('#sheet'); b.innerHTML = '<div class="sheet-bg" data-act="close"></div><div class="sheet" role="dialog">' + html + '</div>'; b.hidden = false; }
-function closeSheet() { if (S.opin) { const r = S.opin.res; S.opin = null; r(null); } const b = $('#sheet'); S.qopen = false; b.hidden = true; b.innerHTML = ''; if (S.deferRender) { S.deferRender = false; render(); } }
+function closeSheet() { if (S.opin) { const r = S.opin.res; S.opin = null; r(null); } const b = $('#sheet'); S.qopen = false; b.hidden = true; b.innerHTML = ''; if (S.deferRender) { S.deferRender = false; render(); } if (S.conflictPending) setTimeout(notifyConflicts, 250); }
 
 /* ---------- API dan sinkronisasi ---------- */
 let pending = 0;
@@ -94,7 +105,7 @@ async function api(action, payload, opt) {
 async function busy(label, fn) {
   if (S.busyOn) return; S.busyOn = true;
   const el = $('#busy'); el.innerHTML = '<div class="busybox"><div class="loader"></div><div class="lbl">' + esc(label) + '</div></div>'; el.hidden = false;
-  try { return await fn(); } finally { S.busyOn = false; el.hidden = true; el.innerHTML = ''; }
+  try { return await fn(); } finally { S.busyOn = false; el.hidden = true; el.innerHTML = ''; if (S.conflictPending && $('#sheet').hidden) setTimeout(notifyConflicts, 400); }
 }
 function busyLabel(t) { const l = document.querySelector('#busy .lbl'); if (l) l.textContent = t; }
 const skel = n => Array.from({length: n || 3}, () => '<div class="sk"></div>').join('');
@@ -196,7 +207,7 @@ async function flush() {
         else { q.status = 'review'; q.state = 'error'; q.error = (r && r.error) || 'Ditolak server'; } });
       LS.set('queue', S.queue); refreshRc(); flushDelay = 15000;
     }
-  } finally { flushing = false; S.queue.forEach(q => { if (q.state === 'sending') q.state = 'waiting'; }); LS.set('queue', S.queue); LS.set('data', S.data); badge(); if (S.tab === 'riwayat' && $('#sheet').hidden) vRiwayat(); scheduleFlush(); }
+  } finally { flushing = false; S.queue.forEach(q => { if (q.state === 'sending') q.state = 'waiting'; }); LS.set('queue', S.queue); LS.set('data', S.data); badge(); if (S.tab === 'riwayat' && $('#sheet').hidden) vRiwayat(); scheduleFlush(); notifyConflicts(); }
 }
 function softLogout(msg) { S.rhist = null; VC = {}; S.token = null; LS.del('token'); renderLogin(msg || 'Sesi berakhir, silakan masuk lagi.'); }
 function logout() { if (S.token && C.API_URL && C.API_URL.indexOf('http') === 0) { try { fetch(C.API_URL, {method: 'POST', keepalive: true, headers: {'Content-Type': 'text/plain;charset=utf-8'}, body: JSON.stringify({action: 'logout', token: S.token, payload: {}})}).catch(() => {}); } catch (e) {} } S.rhist = null; VC = {}; S.token = null; S.data = null; S.cart = []; LS.del('token'); LS.del('data'); LS.del('cart'); renderLogin(); }
@@ -662,18 +673,41 @@ function qstatUpd() {
   el.className = 'qstat ' + (r ? 'err' : off ? 'off' : 'wait'); el.innerHTML = '<span class="qdot"></span><span class="qt">' + esc(msg) + '</span>' + svg('chev', 16);
 }
 const qrefresh = () => { if (S.qopen && !$('#sheet').hidden) queueSheet(); else if (S.tab === 'riwayat') vRiwayat(); };
-function queueSheet() {
-  S.qopen = true; const mineQ = S.data ? mineAll() : S.queue, off = !navigator.onLine;
-  const secs = n => n < 60 ? n + ' detik' : Math.round(n / 60) + ' menit', next = S.nextFlush && S.nextFlush > Date.now() ? 'Percobaan otomatis berikutnya sekitar ' + secs(Math.round((S.nextFlush - Date.now()) / 1000)) + '.' : '';
-  const item = q => { const i = S.queue.indexOf(q), n = q.payload.items.reduce((a, x) => a + x.qty, 0), st = q.status === 'review' ? '<span class="tag red">Perlu ditinjau</span>' : q.state === 'sending' ? '<span class="tag busy">Mengirim…</span>' : '<span class="tag">Menunggu</span>';
-    return '<div class="li" style="display:block"><div class="kv"><b>' + rp(q.total) + '</b>' + st + '</div><div class="muted">' + esc(fmtDT(q.ts).slice(11)) + ' · ' + esc(q.ch) + ' · ' + n + ' item' + (q.tries ? ' · percobaan ke-' + q.tries : '') + '</div>' + (q.error ? '<div style="color:var(--err);font-size:13px">' + esc(q.error) + '</div>' : '') +
-      (q.status === 'review' ? '<div class="row2">' + (/^Diskon|^Total struk/.test(q.error || '') ? '<button class="btn pri sm" data-act="qauth" data-i="' + i + '">Otorisasi Owner</button>' : '') + '<button class="btn sec sm" data-act="qretry" data-i="' + i + '">Coba lagi</button><button class="btn dan sm" data-act="qdel" data-i="' + i + '">Hapus</button></div>' : '') + '</div>'; };
-  sheet('<div class="grab"></div><h2>Antrean transaksi</h2><div class="qs-top"><span class="tag ' + (off ? '' : 'grn') + '">' + (off ? 'Offline' : 'Online') + '</span><span class="muted">Terakhir sinkron: ' + (S.lastSync ? fmtDT(S.lastSync).slice(11) : '-') + ' · penyimpanan: ' + Store.mode() + '</span></div>' +
-    (mineQ.length ? mineQ.map(item).join('') : '<div class="okmark sm">' + svg('check', 22) + '</div><p class="muted" style="text-align:center">Semua transaksi sudah terkirim ke server.</p>') + (next ? '<p class="muted">' + next + '</p>' : '') +
-    (mineQ.some(q => q.status === 'pending') ? '<button class="btn pri" data-act="qnow">Kirim sekarang</button>' : '') + '<button class="btn sec" data-act="close">Tutup</button>');
-  S.qopen = true;
+/* Visualizer antrean (v1.9.8). Setiap transaksi yang ditolak server diklasifikasikan (qinfo) agar kasir tahu APA yang terjadi dan APA yang harus dilakukan, bukan sekadar
+   "Perlu ditinjau". Uang pelanggan mungkin sudah diterima, jadi transaksi bermasalah dimunculkan otomatis (notifyConflicts) sekali per kegagalan. */
+function qinfo(q) {
+  const e = String(q.error || '');
+  if (/^Diskon|^Total struk/.test(e)) return {t: 'Butuh persetujuan Owner', h: 'Diskon atau total berbeda dari server. Owner menyetujui dengan PIN, lalu transaksi dikirim ulang.', auth: true};
+  if (/Harga belum diatur|Channel tidak valid/.test(e)) return {t: 'Harga atau channel berubah di server', h: 'Perbarui data (Menu, Perbarui), lalu Coba lagi. Bila produk memang tidak dijual lagi, Hapus dengan alasan.'};
+  if (/Varian (tidak ditemukan|nonaktif)|Jumlah tidak valid/.test(e)) return {t: 'Produk dihapus atau dinonaktifkan', h: 'Produk di transaksi ini sudah tidak aktif. Minta Owner mengaktifkannya lalu Coba lagi, atau Hapus dengan alasan.'};
+  if (/Metode bayar/.test(e)) return {t: 'Metode bayar dinonaktifkan', h: 'Minta Owner mengaktifkan metode ini di Pengaturan lalu Coba lagi, atau Hapus dengan alasan.'};
+  if (/tersangkut setengah jalan/.test(e)) return {t: 'Tersangkut di server', h: 'Jangan dihapus. Minta Owner menyelesaikannya di Menu, Pemeriksaan data, lalu Coba lagi.'};
+  return {t: 'Ditolak server', h: 'Bila uang pelanggan sudah diterima, jangan diabaikan: Coba lagi, atau Hapus dengan alasan agar tercatat di server.'};
 }
-
+function qitems(q) { // isi transaksi dalam kata-kata (maks. 5 baris, sisanya diringkas)
+  const its = q.payload.items, shown = its.slice(0, 5).map(it => { const v = vById(it.variant_id); return esc((v ? vName(v) + (vSub(v) ? ' ' + vSub(v) : '') : '(produk tidak ada)') + ' ×' + qf(it.qty)); });
+  return shown.join(', ') + (its.length > 5 ? ' +' + (its.length - 5) + ' lainnya' : '');
+}
+function notifyConflicts() {
+  if (!S.data || !S.token) return;
+  const bad = mineAll().filter(q => q.status === 'review' && !q.alerted); if (!bad.length) { S.conflictPending = false; return; }
+  if (!$('#sheet').hidden || S.busyOn) { S.conflictPending = true; return; } // jangan memotong pembayaran atau struk yang sedang tampil: ditampilkan setelah layar itu ditutup
+  S.conflictPending = false; bad.forEach(q => { q.alerted = true; }); LS.set('queue', S.queue); queueSheet();
+}
+function queueSheet() {
+  S.qopen = true; const all = S.data ? mineAll() : S.queue, off = !navigator.onLine, rev = all.filter(q => q.status === 'review'), mineQ = rev.concat(all.filter(q => q.status !== 'review')), retryable = rev.filter(q => !qinfo(q).auth).length;
+  const secs = n => n < 60 ? n + ' detik' : Math.round(n / 60) + ' menit', next = S.nextFlush && S.nextFlush > Date.now() ? 'Percobaan otomatis berikutnya sekitar ' + secs(Math.round((S.nextFlush - Date.now()) / 1000)) + '.' : '';
+  const item = q => { const i = S.queue.indexOf(q), n = q.payload.items.reduce((a, x) => a + x.qty, 0), st = q.status === 'review' ? '<span class="tag red">Perlu ditinjau</span>' : q.state === 'sending' ? '<span class="tag busy">Mengirim…</span>' : '<span class="tag">Menunggu</span>', nf = q.status === 'review' ? qinfo(q) : null;
+    return '<div class="li" style="display:block"><div class="kv"><b>' + rp(q.total) + '</b>' + st + '</div><div class="muted">' + esc(fmtDT(q.ts).slice(11)) + ' · ' + esc(q.ch) + ' · ' + n + ' item' + (q.tries ? ' · percobaan ke-' + q.tries : '') + '</div>' +
+      '<div class="qitems">' + qitems(q) + '</div>' + (nf ? '<div class="qwhy"><b>' + esc(nf.t) + '</b><div>' + esc(nf.h) + '</div></div>' : '') + (q.error ? '<div style="color:var(--err);font-size:13px">' + esc(q.error) + '</div>' : '') +
+      (q.status === 'review' ? '<div class="row2">' + (nf.auth ? '<button class="btn pri sm" data-act="qauth" data-i="' + i + '">Otorisasi Owner</button>' : '') + '<button class="btn sec sm" data-act="qretry" data-i="' + i + '">Coba lagi</button><button class="btn dan sm" data-act="qdel" data-i="' + i + '">Hapus</button></div>' : '') + '</div>'; };
+  sheet('<div class="grab"></div><h2>Antrean transaksi</h2>' + (rev.length ? '<div class="qwarn" role="alert"><b>' + rev.length + ' transaksi tidak bisa dikirim.</b> Uang pelanggan mungkin sudah diterima, jadi jangan diabaikan. Pilih tindakan di tiap transaksi.</div>' : '') +
+    '<div class="qs-top"><span class="tag ' + (off ? '' : 'grn') + '">' + (off ? 'Offline' : 'Online') + '</span><span class="muted">Terakhir sinkron: ' + (S.lastSync ? fmtDT(S.lastSync).slice(11) : '-') + ' · penyimpanan: ' + Store.mode() + '</span></div>' +
+    (mineQ.length ? mineQ.slice(0, lim('q')).map(item).join('') + moreBtn('q', mineQ.length) : '<div class="okmark sm">' + svg('check', 22) + '</div><p class="muted" style="text-align:center">Semua transaksi sudah terkirim ke server.</p>') + (next ? '<p class="muted">' + next + '</p>' : '') +
+    (retryable > 1 ? '<button class="btn sec" data-act="qretryall">Coba lagi semua (' + retryable + ')</button>' : '') +
+    (mineQ.some(q => q.status === 'pending') ? '<button class="btn pri" data-act="qnow">Kirim sekarang</button>' : '') + '<button class="btn sec" data-act="close">Tutup</button>');
+  S.qopen = true; watchMore();
+}
 /* ---------- Kasir ---------- */
 function calc() {
   const s = S.data.settings; let sub = 0; S.cart.forEach(l => { sub += l.qty * (priceOf(l.v, S.ch) || 0); });
@@ -779,12 +813,14 @@ function grid() {
   const base = d.variants.filter(v => !isAddon(v) && (S.cat === 'Semua' || String((pById(v.product_id) || {}).kategori) === S.cat) && (!q || (vName(v) + ' ' + vSub(v) + ' ' + v.sku).toLowerCase().indexOf(q) >= 0));
   let list = S.hideOut ? base.filter(avail) : base;
   list = list.map((v, i) => [v, i]).sort((x, y) => (avail(y[0]) - avail(x[0])) || (x[1] - y[1])).map(x => x[0]); // tersedia di atas, habis di bawah, urutan asli dijaga
+  const sig = S.cat + '|' + q + '|' + S.hideOut; if (S.gsig !== sig) { S.gsig = sig; delete LIM.grid; const mn = $('#main'); if (mn) mn.scrollTop = 0; } // filter berganti: mulai dari halaman pertama dan dari atas (tanpa ini browser menahan posisi di dasar daftar baru dan sentinel memuat berantai sampai semua baris)
   const kc = $('#kcount'); if (kc) kc.textContent = list.length + ' produk' + (S.hideOut && base.length > list.length ? ' · ' + (base.length - list.length) + ' habis disembunyikan' : '');
-  $('#grid').innerHTML = list.map(v => {
+  $('#grid').innerHTML = (list.slice(0, lim('grid')).map(v => {
     const off = isOff(v), n = heatN(v.level_pedas);
     return '<div class="card pc h' + (n < 0 ? 'x' : n) + (off ? ' off' : '') + (cartQty(v.id) ? ' in' : '') + '" data-act="add" data-v="' + esc(v.id) + '" role="button" tabindex="0" aria-disabled="' + (off ? 'true' : 'false') + '">' + cardHtml(v) + '</div>';
-  }).join('') || (S.hideOut && base.length ? emptyState('stok', 'Semua produk habis', 'Matikan "Sembunyikan yang habis" untuk melihat daftar lengkap.', '<button class="btn sec" data-act="showout">Tampilkan yang habis</button>') :
+  }).join('') + moreBtn('grid', list.length)) || (S.hideOut && base.length ? emptyState('stok', 'Semua produk habis', 'Matikan "Sembunyikan yang habis" untuk melihat daftar lengkap.', '<button class="btn sec" data-act="showout">Tampilkan yang habis</button>') :
     own() ? emptyState('stok', 'Belum ada produk untuk dijual', 'Produk harus punya varian dan harga agar tampil di sini.', '<button class="btn pri" data-act="go_cek">Periksa data</button>') : emptyState('stok', 'Belum ada produk', 'Tidak ada produk di kategori ini.', ''));
+  watchMore();
 }
 function updCard(id) { // perbarui satu kartu saja, tanpa menggambar ulang seluruh daftar
   const el = document.querySelector('#grid .card[data-v="' + id + '"]'), v = vById(id); if (!el || !v) return;
@@ -805,7 +841,7 @@ function addToCart(id) {
   if (priceOf(id, S.ch) == null) return toast('Harga belum diatur untuk channel ini');
   const l = S.cart.find(x => x.v === id), q = (l ? l.qty : 0) + 1, st = Number(v.stok) || 0;
   if (T(cfg('blokir_stok_minus')) && q > st) return toast(st > 0 ? 'Stok tidak cukup' : 'Stok habis');
-  if (l) l.qty = q; else S.cart.push({v: id, qty: 1});
+  if (l) l.qty = q; else { S.cart.push({v: id, qty: 1}); if (S.cart.length > lim('cart')) LIM.cart = S.cart.length; } // baris baru selalu terlihat
   saveCart(); updCard(id); syncCart(); buzz();
 }
 function dropFromCart(id) {
@@ -816,9 +852,9 @@ const payMethods = () => ['tunai', 'transfer', 'qris'].filter(m => { const v = c
 const methodChips = () => payMethods().map(m => '<button class="chip ' + (S.metode === m ? 'on' : '') + '" data-act="metode" data-m="' + m + '">' + m.toUpperCase() + '</button>').join('');
 function cartLines() {
   const el = $('#cl'); if (!el) return;
-  if (!S.cart.length) { el.innerHTML = '<div class="cp-empty">' + svg('kasir', 34) + '<p>Ketuk produk di sebelah kiri untuk menambahkannya ke pesanan.</p></div>'; return; }
-  el.innerHTML = S.cart.map((l, i) => { const v = vById(l.v), p = priceOf(l.v, S.ch) || 0;
-    return '<div class="li cl-i"><div class="cl-n"><b>' + esc(vName(v)) + '</b><div class="muted">' + esc([vSub(v), rp(p)].filter(Boolean).join(' · ')) + '</div></div><div class="qty"><button data-act="dec" data-i="' + i + '" aria-label="Kurangi">−</button><span>' + l.qty + '</span><button data-act="inc" data-i="' + i + '" aria-label="Tambah">+</button></div><b class="cl-t">' + rp(p * l.qty) + '</b></div>'; }).join('');
+  if (!S.cart.length) { delete LIM.cart; el.innerHTML = '<div class="cp-empty">' + svg('kasir', 34) + '<p>Ketuk produk di sebelah kiri untuk menambahkannya ke pesanan.</p></div>'; return; }
+  el.innerHTML = S.cart.slice(0, lim('cart')).map((l, i) => { const v = vById(l.v), p = priceOf(l.v, S.ch) || 0;
+    return '<div class="li cl-i"><div class="cl-n"><b>' + esc(vName(v)) + '</b><div class="muted">' + esc([vSub(v), rp(p)].filter(Boolean).join(' · ')) + '</div></div><div class="qty"><button data-act="dec" data-i="' + i + '" aria-label="Kurangi">−</button><span>' + l.qty + '</span><button data-act="inc" data-i="' + i + '" aria-label="Tambah">+</button></div><b class="cl-t">' + rp(p * l.qty) + '</b></div>'; }).join('') + moreBtn('cart', S.cart.length); watchMore();
 }
 function cashBox() {
   const el = $('#cashbox'); if (!el) return;
@@ -912,7 +948,8 @@ function refreshRc() { // pratinjau + cetak browser: logo (bila aktif) di atas t
 
 /* ---------- Riwayat ---------- */
 async function vRiwayat() {
-  const t0 = today(), day = S.day || t0, yd = addDays(t0, -1), pre = S.rcustom ? 'custom' : day === t0 ? 'today' : day === yd ? 'yday' : 'custom';
+  const t0 = today(), day = S.day || t0; if (S.rlimDay !== day) { S.rlimDay = day; delete LIM.hist; } // hari berganti: mulai dari halaman pertama
+  const yd = addDays(t0, -1), pre = S.rcustom ? 'custom' : day === t0 ? 'today' : day === yd ? 'yday' : 'custom';
   $('#main').innerHTML = wrapChips('<button class="chip ' + (pre === 'today' ? 'on' : '') + '" data-act="rday" data-p="today">Hari ini</button><button class="chip ' + (pre === 'yday' ? 'on' : '') + '" data-act="rday" data-p="yday">Kemarin</button><button class="chip ' + (pre === 'custom' ? 'on' : '') + '" data-act="rday" data-p="custom">Pilih tanggal</button>') +
     '<p class="muted rcap">' + esc(idDate(day)) + '</p>' + (pre === 'custom' ? '<label>Tanggal<input type="date" class="inp" data-chg="day" value="' + day + '"></label>' : '') + '<div id="rq"></div><div id="rsum"></div><div id="rlist">' + skel(3) + '</div>';
   const qs = S.queue.map((q, i) => q.uid !== S.data.user.uid && q.by !== S.data.user.uid ? '' : '<div class="li"><div><b>' + rp(q.total) + '</b> <span class="muted">' + esc(q.ch) + ' · ' + fmtDT(q.ts).slice(11) + '</span>' +
@@ -921,13 +958,19 @@ async function vRiwayat() {
   $('#rq').innerHTML = qs;
   const uid = S.data.user.uid, hist = S.rhist && S.rhist.uid === uid ? S.rhist : (S.rhist = {uid: uid, d: {}}), ent = hist.d[day];
   const paint = e => {
-    if (S.tab !== 'riwayat' || !$('#rlist') || !$('#rsum')) return; const rows = e.rows;
+    if (S.tab !== 'riwayat' || !$('#rlist') || !$('#rsum')) return; const rows = e.rows; S.rcur = e;
     const done = rows.filter(r => r.status === 'selesai'), nTrx = done.filter(r => !r.ref_sale_id).length, omzet = done.reduce((a, r) => a + Number(r.total), 0), avg = nTrx ? omzet / nTrx : 0; // retur (nilai minus) mengurangi omzet tetapi tidak dihitung sebagai transaksi
     $('#rsum').innerHTML = '<div class="kgrid"><div class="kpi"><div class="muted">Omzet</div><b>' + rp(omzet) + '</b></div><div class="kpi"><div class="muted">Transaksi</div><b>' + nTrx + '</b></div><div class="kpi wide"><div class="muted">Rata-rata per transaksi</div><b>' + rp(avg) + '</b></div>' + (own() ? '<div class="kpi wide"><div class="muted">Produk terlaris</div><b id="rtop">' + (done.length ? (e.top || 'Memuat…') : '-') + '</b></div>' : '') + '</div>';
-    if (own() && done.length && !e.top) api('report.get', {type: 'penjualan', from: day, to: day}, {silent: true}).then(r => { const best = r.rows.slice().sort((a, b) => b[2] - a[2])[0]; e.top = best ? esc((best[0] + ' ' + best[1]).trim()) + ' <small class="muted">' + qf(best[2]) + ' terjual</small>' : '-'; const el = $('#rtop'); if (el && S.tab === 'riwayat') el.innerHTML = e.top; }).catch(() => { const el = $('#rtop'); if (el && !e.top) el.textContent = '-'; });
-    $('#rlist').innerHTML = rows.map(r => '<div class="li"><div><b>' + esc(r.nomor) + '</b>' + (r.ref_sale_id ? ' <span class="tag red">Retur</span>' : '') + '<div class="muted">' + esc(String(r.tanggal).slice(11, 16)) + ' · ' + esc(chName(r.channel_id)) + ' · ' + esc(r.metode_bayar) + '</div></div><div class="r"><b>' + rp(r.total) + '</b>' + (r.status === 'selesai' && !r.ref_sale_id ? '<div><button class="chip" data-act="retur" data-id="' + esc(r.id) + '">Retur</button></div>' : '') + '</div></div>').join('') ||
-      emptyState('riwayat', 'Belum ada transaksi', 'Tidak ada transaksi pada ' + esc(idDate(day)) + '.', '<button class="btn pri" data-act="tab" data-t="kasir">Mulai transaksi</button>');
+    if (own() && done.length && !e.top && !e.topReq) { e.topReq = true; api('report.get', {type: 'penjualan', from: day, to: day}, {silent: true}).then(r => { const best = r.rows.slice().sort((a, b) => b[2] - a[2])[0]; e.top = best ? esc((best[0] + ' ' + best[1]).trim()) + ' <small class="muted">' + qf(best[2]) + ' terjual</small>' : '-'; const el = $('#rtop'); if (el && S.tab === 'riwayat') el.innerHTML = e.top; }).catch(() => { const el = $('#rtop'); if (el && !e.top) el.textContent = '-'; }); }
+    paintList(e);
   };
+  const paintList = e => { // v1.9.8: daftar bertahap; "Tampilkan lagi" hanya menggambar ulang daftar (KPI tidak dihitung ulang)
+    if (S.tab !== 'riwayat' || !$('#rlist')) return; const rows = e.rows;
+    $('#rlist').innerHTML = rows.slice(0, lim('hist')).map(r => '<div class="li"><div><b>' + esc(r.nomor) + '</b>' + (r.ref_sale_id ? ' <span class="tag red">Retur</span>' : '') + '<div class="muted">' + esc(String(r.tanggal).slice(11, 16)) + ' · ' + esc(chName(r.channel_id)) + ' · ' + esc(r.metode_bayar) + '</div></div><div class="r"><b>' + rp(r.total) + '</b>' + (r.status === 'selesai' && !r.ref_sale_id ? '<div><button class="chip" data-act="retur" data-id="' + esc(r.id) + '">Retur</button></div>' : '') + '</div></div>').join('') + moreBtn('hist', rows.length) ||
+      emptyState('riwayat', 'Belum ada transaksi', 'Tidak ada transaksi pada ' + esc(idDate(day)) + '.', '<button class="btn pri" data-act="tab" data-t="kasir">Mulai transaksi</button>');
+    watchMore();
+  };
+  S.rlist = paintList;
   try {
     if (ent) paint(ent); // tampil seketika dari hasil terakhir; diperbarui hanya bila ada data baru
     if (ent && navigator.onLine === false) return;
@@ -1265,7 +1308,7 @@ const ACT = {
   opin_ok: opinOk,
   qauth: async el => { const q = S.queue[el.dataset.i]; if (!q) return; const kind = /^Diskon/.test(q.error || '') ? 'diskon' : 'selisih';
     const tok = await askOwner(q.error + ' Owner dapat menyetujui dengan PIN.', kind, q.rid, kind === 'diskon' ? q.payload.diskon : 0);
-    if (!tok) return queueSheet(); q.payload.override = Object.assign({}, q.payload.override, {[kind]: tok}); q.status = 'pending'; q.state = 'waiting'; q.error = ''; LS.set('queue', S.queue); flush(); queueSheet(); },
+    if (!tok) return queueSheet(); q.payload.override = Object.assign({}, q.payload.override, {[kind]: tok}); q.status = 'pending'; q.state = 'waiting'; q.error = ''; q.alerted = false; LS.set('queue', S.queue); flush(); queueSheet(); },
   uunlock: async el => { try { await api('user.unlock', {id: el.dataset.id}); toast('Kunci akun dibuka'); closeSheet(); vUsers(); } catch (e) { toast(e.message); } },
   go_tutup: () => { S.tab = 'tutup'; render(); }, tclose: () => tutupSimpan(),
   queue: queueSheet, qnow: () => { flush(); setTimeout(() => { if (S.qopen) queueSheet(); }, 700); },
@@ -1277,7 +1320,11 @@ const ACT = {
   dcopy: () => copyText(JSON.stringify({v: C.VERSION, ua: navigator.userAgent, online: navigator.onLine, queue: S.queue.length, penyimpanan: Store.mode(), err: LS.get('errlog', [])}, null, 1), 'Log disalin. Tempel untuk dikirim.'),
   dclear: () => { LS.set('errlog', []); vDiag(); toast('Catatan kesalahan dihapus'); },
   copyurl: () => copyText(location.href.split('#')[0], 'Alamat aplikasi disalin.'),
-  qretry: el => { const q = S.queue[el.dataset.i]; if (q) { q.status = 'pending'; q.state = 'waiting'; q.error = ''; } LS.set('queue', S.queue); qrefresh(); flush(); },
+  qretry: el => { const q = S.queue[el.dataset.i]; if (q) { q.status = 'pending'; q.state = 'waiting'; q.error = ''; q.alerted = false; } LS.set('queue', S.queue); qrefresh(); flush(); },
+  qretryall: () => { S.queue.forEach(q => { if (q.status === 'review' && (q.uid === S.data.user.uid || q.by === S.data.user.uid) && !qinfo(q).auth) { q.status = 'pending'; q.state = 'waiting'; q.error = ''; q.alerted = false; } }); LS.set('queue', S.queue); qrefresh(); flush(); },
+  more: el => { const k = el.dataset.k; if (!PGN[k]) return; LIM[k] = lim(k) + PGN[k]; // satu halaman lagi
+    if (k === 'grid') grid(); else if (k === 'cart') cartLines(); else if (k === 'hist') { if (S.rlist && S.rcur) S.rlist(S.rcur); }
+    else if (k === 'q') { const sc = document.querySelector('#sheet .sheet'), top = sc ? sc.scrollTop : 0; queueSheet(); const n2 = document.querySelector('#sheet .sheet'); if (n2) n2.scrollTop = top; } }, // sheet digambar ulang: pertahankan posisi gulir
   qdel: async el => {
     const q = S.queue[el.dataset.i]; if (!q) return;
     if (!navigator.onLine) return toast('Hubungkan internet dulu: penghapusan dicatat ke server agar ada jejaknya');
@@ -1334,16 +1381,26 @@ if ('serviceWorker' in navigator) {
     swReg = reg; if (reg.waiting && had) updBanner();
     reg.addEventListener('updatefound', () => { const nw = reg.installing; if (nw) nw.addEventListener('statechange', () => { if (nw.state === 'installed' && navigator.serviceWorker.controller) updBanner(); }); });
   }).catch(() => {});
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if (had && !rl) { rl = true; location.reload(); } });
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (had && !rl) { rl = true; reloadWhenIdle(); } });
 }
-ACT.reload = () => { if (swReg && swReg.waiting) swReg.waiting.postMessage({type: 'SKIP_WAITING'}); else location.reload(); };
+/* v1.9.8: pembaruan tidak boleh memutus sesi kasir. Pemuatan ulang (mis. akibat tab lain menekan "Muat ulang") menunggu sampai tidak ada layar terbuka, permintaan berjalan,
+   atau pengiriman antrean; keranjang dan antrean sudah tersimpan di perangkat sehingga tetap utuh setelah dimuat ulang. */
+const idleNow = () => $('#sheet').hidden && !S.busyOn && !flushing && !S.dirty && pending === 0;
+let rlT = null;
+function reloadWhenIdle() {
+  clearTimeout(rlT);
+  if (!(S.token && S.data) || idleNow()) { Promise.resolve(Store.flush()).catch(() => {}).then(() => location.reload()); return; }
+  const b = $('#upd'); b.hidden = false; b.textContent = 'Versi baru siap. Aplikasi dimuat ulang otomatis setelah layar yang sedang terbuka selesai.';
+  rlT = setTimeout(reloadWhenIdle, 1500);
+}
+ACT.reload = () => { if (S.token && S.data && !idleNow()) return toast('Selesaikan dulu layar yang sedang terbuka, lalu tekan Muat ulang lagi'); if (swReg && swReg.waiting) swReg.waiting.postMessage({type: 'SKIP_WAITING'}); else location.reload(); };
 window.addEventListener('online', () => { badge(); flush(); checkUpdates(true); });
 window.addEventListener('offline', badge);
 document.addEventListener('visibilitychange', () => { if (document.hidden) Store.flush(); if (!document.hidden) { checkUpdates(); flush(); if (swReg) swReg.update().catch(() => {}); } });
 async function start() {
   await Store.init();
   S.token = LS.get('token', null); S.data = LS.get('data', null); S.queue = LS.get('queue', []); S.ch = LS.get('ch', null); S.cart = LS.get('cart', []); S.metode = LS.get('metode', 'tunai'); S.lastSync = LS.get('lastsync', 0) || null; S.hideOut = !!LS.get('hideOut', false);
-  if (S.token && S.data) { S.tab = own() ? 'dash' : 'kasir'; render(); checkUpdates(true); flush(); } else renderLogin();
+  if (S.token && S.data) { S.tab = own() ? 'dash' : 'kasir'; render(); checkUpdates(true); flush(); setTimeout(notifyConflicts, 1200); } else renderLogin(); // transaksi "perlu ditinjau" dari sesi sebelumnya langsung diingatkan
 }
 window.addEventListener('pagehide', () => Store.flush());
 if (window.MutationObserver) new MutationObserver(() => { cancelAnimationFrame(S.fr); S.fr = requestAnimationFrame(initFades); }).observe(document.getElementById('app'), {childList: true, subtree: true});

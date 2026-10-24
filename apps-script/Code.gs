@@ -1,4 +1,4 @@
-/** Duado Snack API v1.9.1 (Google Apps Script). Dipanggil dari frontend GitHub Pages lewat satu endpoint POST JSON.
+/** Duado Snack API v1.9.8 (Google Apps Script). Dipanggil dari frontend GitHub Pages lewat satu endpoint POST JSON.
  *  Langkah awal: jalankan setup() sekali, lalu Deploy > Web app (Execute as: Me, Access: Anyone). */
 const TZ = 'Asia/Jakarta';
 const SCHEMA = {
@@ -169,13 +169,13 @@ function rowsByKey_(t, key, set) { // semua baris yang nilai kolom `key`-nya ada
 /* Cache tabel: satu entri CacheService maksimal 100 KB, sedangkan tabel seperti channel_prices (varian x channel) bisa melewatinya. Karena itu JSON dipecah
    menjadi potongan ~30.000 karakter; kunci t_<tabel> hanya memuat meta {stempel, jumlah potongan} dan setiap potongan diawali stempel yang sama, sehingga
    pembacaan yang bertepatan dengan penulisan ulang tidak pernah menghasilkan data campuran. Gagal menyimpan dicatat (console.warn), bukan ditelan. */
-const CACHE_CHUNK_ = 30000, CACHE_MAXCHUNK_ = 60;
+const CACHE_CHUNK_ = 30000, CACHE_MAXCHUNK_ = 60, CACHE_TTL_ = 1800; // v1.9.8: TTL 30 menit (sebelumnya 10). Aman karena setiap penulisan lewat API memanggil bust_; hanya edit langsung di Sheets yang butuh tombol Perbarui (sistem.refresh).
 function cachePutTable_(c, t, json) {
   const parts = []; for (let i = 0; i < json.length; i += CACHE_CHUNK_) parts.push(json.slice(i, i + CACHE_CHUNK_));
   if (parts.length > CACHE_MAXCHUNK_) { console.warn('Cache tabel ' + t + ' dilewati: terlalu besar (' + json.length + ' karakter). Dibaca langsung dari sheet.'); return false; }
   const stamp = Date.now() + '' + Math.floor(Math.random() * 1000), o = {};
   parts.forEach((p, k) => o['t_' + t + '_' + k] = stamp + '|' + p);
-  try { c.putAll(o, 600); c.put('t_' + t, JSON.stringify({s: stamp, n: parts.length}), 600); return true; }
+  try { c.putAll(o, CACHE_TTL_); c.put('t_' + t, JSON.stringify({s: stamp, n: parts.length}), CACHE_TTL_); return true; }
   catch (e) { console.warn('Gagal menyimpan cache tabel ' + t + ': ' + e.message); return false; }
 }
 function cacheGetTable_(c, t) {
@@ -186,19 +186,23 @@ function cacheGetTable_(c, t) {
   for (let k = 0; k < keys.length; k++) { const v = got[keys[k]]; if (!v || v.indexOf(pre) !== 0) return null; out.push(v.slice(pre.length)); }
   try { return JSON.parse(out.join('')); } catch (e) { return null; }
 }
+/* v1.9.8: penjaga balapan cache. Pembaca (bootstrap, ping, dst.) tidak memegang kunci: bila sheet ditulis dan bust_ dipanggil SETELAH pembaca membaca sheet tetapi
+   SEBELUM ia menyimpan ke cache, data basi akan tersimpan sampai TTL habis. Kini bust_ menaikkan penanda generasi ('cgen'); pembaca hanya menyimpan bila generasi
+   tidak berubah sejak sebelum ia membaca (hilang/berubah = tidak disimpan; arah kegagalan selalu aman: hanya membaca ulang dari sheet pada permintaan berikutnya). */
+const gen_ = c => { try { return c.get('cgen'); } catch (e) { return null; } };
 function tbl_(t) {
   const c = CacheService.getScriptCache(), use = CACHED.indexOf(t) >= 0 && !NOCACHE_;
   if (use) { const hit = cacheGetTable_(c, t); if (hit) return hit; }
-  const r = readAll_(t);
-  if (use) cachePutTable_(c, t, JSON.stringify(r));
+  const g = use ? gen_(c) : null, r = readAll_(t);
+  if (use && gen_(c) === g) cachePutTable_(c, t, JSON.stringify(r));
   return r;
 }
-const bust_ = t => { if (NOCACHE_) return; const c = CacheService.getScriptCache(); c.remove('t_' + t); if (t === 'product_variants') c.remove('t_variant_meta'); };
+const bust_ = t => { if (NOCACHE_) return; const c = CacheService.getScriptCache(); c.remove('t_' + t); if (t === 'product_variants') c.remove('t_variant_meta'); try { c.put('cgen', newVer_(), 21600); } catch (e) {} };
 function variantMeta_() { // varian TANPA kolom stok dan HPP (yang berubah di setiap penjualan): aman di-cache sampai katalog berubah. Untuk label dan validasi.
   const c = CacheService.getScriptCache(), use = !NOCACHE_;
   if (use) { const hit = cacheGetTable_(c, 'variant_meta'); if (hit) return hit; }
-  const r = readAll_('product_variants').map(v => ({id: v.id, product_id: v.product_id, sku: v.sku, ukuran: v.ukuran, level_pedas: v.level_pedas, aktif: v.aktif}));
-  if (use) cachePutTable_(c, 'variant_meta', JSON.stringify(r));
+  const g = use ? gen_(c) : null, r = readAll_('product_variants').map(v => ({id: v.id, product_id: v.product_id, sku: v.sku, ukuran: v.ukuran, level_pedas: v.level_pedas, aktif: v.aktif}));
+  if (use && gen_(c) === g) cachePutTable_(c, 'variant_meta', JSON.stringify(r));
   return r;
 }
 /* Versi data dipisah: cat_ver (produk, harga, channel, pengaturan, bahan, resep) dan stock_ver (stok produk jadi). Penjualan, retur, dan pemulihan hanya menaikkan
@@ -240,10 +244,15 @@ function stockGet_() { // peta stok produk jadi saja (beberapa KB), untuk menyeg
 const TRANSIENT_RE_ = /^(Exception: )?(Lock timeout|Could not obtain lock|Service invoked too many times|Service Spreadsheets failed|Service unavailable|Server error|Limit Exceeded|Too many simultaneous|We're sorry, a server error occurred)/i;
 const isTransient_ = e => !!(e && e.retry) || TRANSIENT_RE_.test(String((e && e.message) || e || ''));
 const SALE_LOCK_MS_ = 30000;
+/* v1.9.8: kunci aman bersarang. Kunci skrip Google tidak reentrant: waitLock kedua dalam eksekusi yang sama menunggu dirinya sendiri sampai habis waktu. Penghitung
+   kedalaman membuat pemanggilan bersarang langsung menjalankan fn (kunci sudah dipegang); audit ditulis dan kunci dilepas hanya di lapisan terluar. */
+let LOCK_DEPTH_ = 0;
 function withLock_(fn, waitMs) {
+  if (LOCK_DEPTH_ > 0) return fn();
   const l = LockService.getScriptLock();
   try { l.waitLock(waitMs || 20000); } catch (e) { const b = new Error('Server sedang sibuk (antrean penulisan penuh). Akan dicoba lagi otomatis.'); b.retry = true; throw b; }
-  try { return fn(); } finally { try { flushAudit_(); } finally { l.releaseLock(); } }
+  LOCK_DEPTH_++;
+  try { return fn(); } finally { LOCK_DEPTH_--; try { flushAudit_(); } finally { l.releaseLock(); } }
 }
 /* Grid Google Sheets bawaan hanya 1000 baris; menulis di luar grid menimbulkan galat. Kapasitas ditambah (dengan format Teks untuk kolom teks) sebelum menulis. */
 const BIGT_ = {sales: 1, sale_items: 1, stock_movements: 1, audit_log: 1}; // tabel yang tumbuh cepat: tambah 2.000 baris sekali jalan (lebih jarang memperluas grid)
@@ -463,7 +472,7 @@ function overrideCheck_(token, kind, rid, need) {
 
 /* ===== Endpoint ===== */
 const out_ = o => ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
-function doGet() { return out_({ok: true, app: 'duado-snack-api', version: '1.9.6', time: now_()}); }
+function doGet() { return out_({ok: true, app: 'duado-snack-api', version: '1.9.8', time: now_()}); }
 function doPost(e) {
   let req; try { req = JSON.parse(e.postData.contents); } catch (err) { return out_({ok: false, error: 'Permintaan tidak valid.'}); }
   return out_(api(req));

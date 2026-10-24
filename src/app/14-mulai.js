@@ -7,16 +7,26 @@ if ('serviceWorker' in navigator) {
     swReg = reg; if (reg.waiting && had) updBanner();
     reg.addEventListener('updatefound', () => { const nw = reg.installing; if (nw) nw.addEventListener('statechange', () => { if (nw.state === 'installed' && navigator.serviceWorker.controller) updBanner(); }); });
   }).catch(() => {});
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if (had && !rl) { rl = true; location.reload(); } });
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (had && !rl) { rl = true; reloadWhenIdle(); } });
 }
-ACT.reload = () => { if (swReg && swReg.waiting) swReg.waiting.postMessage({type: 'SKIP_WAITING'}); else location.reload(); };
+/* v1.9.8: pembaruan tidak boleh memutus sesi kasir. Pemuatan ulang (mis. akibat tab lain menekan "Muat ulang") menunggu sampai tidak ada layar terbuka, permintaan berjalan,
+   atau pengiriman antrean; keranjang dan antrean sudah tersimpan di perangkat sehingga tetap utuh setelah dimuat ulang. */
+const idleNow = () => $('#sheet').hidden && !S.busyOn && !flushing && !S.dirty && pending === 0;
+let rlT = null;
+function reloadWhenIdle() {
+  clearTimeout(rlT);
+  if (!(S.token && S.data) || idleNow()) { Promise.resolve(Store.flush()).catch(() => {}).then(() => location.reload()); return; }
+  const b = $('#upd'); b.hidden = false; b.textContent = 'Versi baru siap. Aplikasi dimuat ulang otomatis setelah layar yang sedang terbuka selesai.';
+  rlT = setTimeout(reloadWhenIdle, 1500);
+}
+ACT.reload = () => { if (S.token && S.data && !idleNow()) return toast('Selesaikan dulu layar yang sedang terbuka, lalu tekan Muat ulang lagi'); if (swReg && swReg.waiting) swReg.waiting.postMessage({type: 'SKIP_WAITING'}); else location.reload(); };
 window.addEventListener('online', () => { badge(); flush(); checkUpdates(true); });
 window.addEventListener('offline', badge);
 document.addEventListener('visibilitychange', () => { if (document.hidden) Store.flush(); if (!document.hidden) { checkUpdates(); flush(); if (swReg) swReg.update().catch(() => {}); } });
 async function start() {
   await Store.init();
   S.token = LS.get('token', null); S.data = LS.get('data', null); S.queue = LS.get('queue', []); S.ch = LS.get('ch', null); S.cart = LS.get('cart', []); S.metode = LS.get('metode', 'tunai'); S.lastSync = LS.get('lastsync', 0) || null; S.hideOut = !!LS.get('hideOut', false);
-  if (S.token && S.data) { S.tab = own() ? 'dash' : 'kasir'; render(); checkUpdates(true); flush(); } else renderLogin();
+  if (S.token && S.data) { S.tab = own() ? 'dash' : 'kasir'; render(); checkUpdates(true); flush(); setTimeout(notifyConflicts, 1200); } else renderLogin(); // transaksi "perlu ditinjau" dari sesi sebelumnya langsung diingatkan
 }
 window.addEventListener('pagehide', () => Store.flush());
 if (window.MutationObserver) new MutationObserver(() => { cancelAnimationFrame(S.fr); S.fr = requestAnimationFrame(initFades); }).observe(document.getElementById('app'), {childList: true, subtree: true});

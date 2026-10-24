@@ -22,7 +22,7 @@ async function api(action, payload, opt) {
 async function busy(label, fn) {
   if (S.busyOn) return; S.busyOn = true;
   const el = $('#busy'); el.innerHTML = '<div class="busybox"><div class="loader"></div><div class="lbl">' + esc(label) + '</div></div>'; el.hidden = false;
-  try { return await fn(); } finally { S.busyOn = false; el.hidden = true; el.innerHTML = ''; }
+  try { return await fn(); } finally { S.busyOn = false; el.hidden = true; el.innerHTML = ''; if (S.conflictPending && $('#sheet').hidden) setTimeout(notifyConflicts, 400); }
 }
 function busyLabel(t) { const l = document.querySelector('#busy .lbl'); if (l) l.textContent = t; }
 const skel = n => Array.from({length: n || 3}, () => '<div class="sk"></div>').join('');
@@ -124,7 +124,7 @@ async function flush() {
         else { q.status = 'review'; q.state = 'error'; q.error = (r && r.error) || 'Ditolak server'; } });
       LS.set('queue', S.queue); refreshRc(); flushDelay = 15000;
     }
-  } finally { flushing = false; S.queue.forEach(q => { if (q.state === 'sending') q.state = 'waiting'; }); LS.set('queue', S.queue); LS.set('data', S.data); badge(); if (S.tab === 'riwayat' && $('#sheet').hidden) vRiwayat(); scheduleFlush(); }
+  } finally { flushing = false; S.queue.forEach(q => { if (q.state === 'sending') q.state = 'waiting'; }); LS.set('queue', S.queue); LS.set('data', S.data); badge(); if (S.tab === 'riwayat' && $('#sheet').hidden) vRiwayat(); scheduleFlush(); notifyConflicts(); }
 }
 function softLogout(msg) { S.rhist = null; VC = {}; S.token = null; LS.del('token'); renderLogin(msg || 'Sesi berakhir, silakan masuk lagi.'); }
 function logout() { if (S.token && C.API_URL && C.API_URL.indexOf('http') === 0) { try { fetch(C.API_URL, {method: 'POST', keepalive: true, headers: {'Content-Type': 'text/plain;charset=utf-8'}, body: JSON.stringify({action: 'logout', token: S.token, payload: {}})}).catch(() => {}); } catch (e) {} } S.rhist = null; VC = {}; S.token = null; S.data = null; S.cart = []; LS.del('token'); LS.del('data'); LS.del('cart'); renderLogin(); }

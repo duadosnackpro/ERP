@@ -29,7 +29,7 @@ jobs:
         run: npm run typecheck
       - name: Pemeriksa rilis (versi, berkas, CSP, manifest)
         run: npm run test:release
-      - name: Uji backend (versi data, hash PIN)
+      - name: Uji backend (versi data, hash PIN, kunci dan cache)
         run: npm run test:be
       - name: Uji klien (Chromium sungguhan)
         run: npm run test:fe
