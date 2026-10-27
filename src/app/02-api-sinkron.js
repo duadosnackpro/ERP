@@ -9,7 +9,7 @@ async function api(action, payload, opt) {
   const silent = !!(opt && opt.silent); if (!silent) { pending++; netState(); }
   try {
     const r = await fetch(C.API_URL, {method: 'POST', headers: {'Content-Type': 'text/plain;charset=utf-8'}, body: JSON.stringify({action: action, token: S.token, payload: payload || {}})});
-    const j = await r.json();
+    const j = await r.json(); if (j.ms !== undefined) S.srvMs = j.ms; // waktu proses server (Diagnostik)
     if (!j.ok) { const e = new Error(j.error); e.server = true; e.retry = !!j.retry; e.auth = /^Sesi/.test(j.error); throw e; } // retry: galat sementara di server (kunci penuh, kuota), aman diulang
     if (S.data) { if (j.cat_ver && j.cat_prev && S.data.cat_ver === j.cat_prev) S.data.cat_ver = j.cat_ver; if (j.stock_ver && j.stock_prev && S.data.stock_ver === j.stock_prev) S.data.stock_ver = j.stock_ver; }
     if (j.ver && S.data && j.ver_prev && S.data.ver === j.ver_prev) S.data.ver = j.ver; // perubahan ini dibuat perangkat ini sendiri: tidak perlu muat ulang

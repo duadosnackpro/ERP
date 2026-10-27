@@ -29,7 +29,7 @@ function vDiag() {
   const q = S.queue, errs = LS.get('errlog', []), kv = (a, b) => '<div class="kv"><span>' + a + '</span><span>' + b + '</span></div>', standalone = window.matchMedia && matchMedia('(display-mode: standalone)').matches;
   $('#main').innerHTML = '<button class="chip" data-act="tab" data-t="menu">← Menu</button><div class="card-s"><h3>Info perangkat</h3>' + kv('Versi aplikasi', esc(C.VERSION || '-')) + '<div id="dver"></div>' + kv('Versi data', esc(dverKey() || '-')) + kv('Layar tersimpan (cache)', Object.keys(VC).length + ' hasil') + kv('Mode', standalone ? 'Terpasang (layar utama)' : 'Browser') + kv('Koneksi', navigator.onLine ? 'Online' : 'Offline') +
     kv('Android (untuk RawBT)', isAndroid() ? 'Ya' : 'Tidak') + kv('Fitur Bagikan', navigator.share ? 'Tersedia' : 'Tidak tersedia') + kv('Antrean transaksi', q.filter(x => x.status === 'pending').length + ' menunggu, ' + q.filter(x => x.status === 'review').length + ' perlu ditinjau') + kv('Lebar struk', rcWidth() + ' karakter') + '</div>' +
-    '<div class="card-s"><h3>Uji koneksi server</h3><button class="btn sec" data-act="dping">Uji koneksi</button><div id="dres" class="muted" style="margin-top:6px"></div></div>' +
+    '<div class="card-s"><h3>Uji koneksi dan kecepatan server</h3><button class="btn sec" data-act="dping">Uji koneksi</button><div id="dres" class="muted" style="margin-top:6px"></div></div>' +
     '<div class="card-s"><h3>Printer Bluetooth</h3>' + kv('Android (RawBT)', isAndroid() ? 'Ya' : 'Tidak') + kv('iPhone / iPad', isIOS() ? 'Ya' : 'Tidak') + kv('Web Bluetooth (BLE langsung)', navigator.bluetooth ? 'Tersedia' : 'Tidak tersedia') + kv('Printer tersimpan', esc(LS.get('btname', '') || '-')) + '<label style="margin:8px 0"><input type="checkbox" data-act="btdirect"' + (LS.get('btdirect', false) ? ' checked' : '') + '> Cetak langsung via BLE (tanpa RawBT)</label><button class="btn sec" data-act="btpick">Pilih printer BLE</button>' + (isIOS() ? '<p class="muted">iPhone: gunakan browser dengan Web Bluetooth (mis. Bluefy) dan printer BLE.</p>' : '') + '</div>' +
     '<div class="card-s"><h3>Uji struk</h3><p class="muted">Memeriksa WhatsApp dan printer tanpa membuat transaksi.</p><div class="row2"><button class="btn wa" data-act="dtwa">Uji WhatsApp</button><button class="btn dark" data-act="dtbt">Uji cetak Bluetooth</button></div><button class="btn sec" data-act="dtshare">Uji Bagikan</button>' +
     '<p class="muted">Cetak Bluetooth memakai aplikasi <b>RawBT</b> (Android): pasang dari Play Store, pasangkan printer di dalam RawBT, lalu coba cetak dari RawBT dulu.</p></div>' +
@@ -88,7 +88,7 @@ function patchMaster(t, rec) {
   rec = Object.assign({}, rec); delete rec.created_at; delete rec.updated_at;
   if (t === 'product_variants' || t === 'materials') { const old = S.data[k].find(x => x.id === rec.id); if (old) { rec.stok = old.stok; rec.hpp_rata2 = own() ? rec.hpp_rata2 : old.hpp_rata2; } } // stok hanya berubah lewat transaksi
   const i = S.data[k].findIndex(x => x.id === rec.id); if (i >= 0) S.data[k][i] = Object.assign({}, S.data[k][i], rec); else S.data[k].push(rec);
-  LS.set('data', S.data); return true;
+  idxReset(); LS.set('data', S.data); return true;
 }
 function patchRecipe(r) {
   if (!r || !r.recipe || !S.data.recipes) return false; const rec = Object.assign({}, r.recipe); delete rec.created_at; delete rec.updated_at;

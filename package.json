@@ -1,6 +1,6 @@
 {
   "name": "duado-pos",
-  "version": "1.9.8",
+  "version": "1.9.11",
   "private": true,
   "description": "Duado Snack POS: klien web (tanpa framework) + Google Apps Script",
   "scripts": {
@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "typecheck": "node tools/typecheck.js",
     "test:release": "node tests/release_check.js",
-    "test:be": "node tests/be_ver.js && node tests/be_pin.js && node tests/be_lock.js",
+    "test:be": "node tests/be_ver.js && node tests/be_pin.js && node tests/be_lock.js && node tests/be_sales.js",
     "test:fe": "node tests/fe_sync.js && node tests/fe_ui.js",
     "test": "npm run build:check && npm run test:release && npm run test:be && npm run test:fe",
     "check": "npm run lint && npm run typecheck && npm test"

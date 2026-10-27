@@ -335,3 +335,42 @@ html,body,#app{background:var(--bg)}
 .qitems{font-size:13px;margin:4px 0;color:var(--ink,#2b2320)}
 .qwhy{background:#FFF6E0;border-radius:10px;padding:8px 10px;margin:6px 0;font-size:13px;line-height:1.4}
 #grid,#rlist,#cl{overflow-anchor:none} /* daftar digambar ulang seluruhnya: tanpa ini browser menahan posisi gulir di dasar daftar baru */
+
+/* ===== v1.9.9: efisiensi layar, tata letak, dan kehalusan ===== */
+/* Header Kasir lengket: latar opak penuh (sebelumnya transparan di bawah sehingga kartu tembus di balik baris "produk / sembunyikan habis"), plus bayangan tipis saat ada yang bergulir di bawahnya */
+.kasir-top{background:var(--bg);padding-bottom:4px}
+.kasir-top::after{content:"";position:absolute;left:0;right:0;top:100%;height:10px;background:linear-gradient(var(--bg),rgba(250,247,242,0));pointer-events:none}
+.split .kasir-top::after{display:none}
+.krow{margin-bottom:0}
+/* Kartu produk: foto 4:3 (lebih banyak produk per layar), huruf awal lebih kecil */
+.ph{aspect-ratio:4/3}.ph .ini{font-size:34px}
+.card.pc{contain:layout paint}
+/* Sheet pembayaran: baris keranjang dua baris (nama + total; varian + stepper), nama tidak lagi terjepit */
+.cl-i{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n t" "s q";align-items:center;gap:2px 12px}
+.cl-i .cl-n{display:contents}.cl-i .cl-n b{grid-area:n;overflow-wrap:anywhere}.cl-i .cl-n .muted{grid-area:s}
+.cl-i .qty{grid-area:q;justify-self:end}.cl-i .cl-t{grid-area:t;align-self:start;min-width:0}
+/* Tombol Bayar lengket: tidak ada kartu yang mengintip di balik sudut membulat */
+#paybtn{box-shadow:0 0 0 6px var(--bg),0 -14px 14px 6px var(--bg)}
+/* Tablet: panel pesanan bisa digulir dan tombol Bayar selalu terlihat (sebelumnya terpotong pada tinggi layar ~820px) */
+@media (min-width:900px){
+  .kright{overflow:auto}
+  .kright #cl{flex:none;overflow:visible;min-height:0}
+  .kright #paybtn{position:sticky;bottom:0;box-shadow:0 0 0 6px #fff,0 -14px 14px 6px #fff}
+}
+/* Umpan balik sentuhan seragam dan kursor */
+.btn,.chip,.mi,.li,.plus,.step button,.qty button{touch-action:manipulation}
+.mi:active,button.li:active{background:#FBF6EC}
+/* Gerak hanya pada transform/opacity: kartu tidak menganimasikan box-shadow */
+.card.pc{transition:transform .12s}
+@media (hover:hover){.card.pc:hover{border-color:#d9cdb9}.btn.sec:hover,.chip:hover{border-color:var(--mar)}}
+/* v1.9.9 ponsel: pemilih channel tidak lagi menempel */
+.kasir-ctl{margin:0 0 4px}.kasir-ctl .seg{margin-bottom:4px}
+.kasir-ctl #qstat.qstat{margin-bottom:6px}
+
+/* ===== v1.9.11: aksesibilitas (keyboard, pembaca layar) dan teks kecil ===== */
+/* Teks bantu minimal 12px (sebelumnya 10-11.5px di beberapa label); kartu produk dan kolom grafik tetap muat. */
+.sz,.stk,.lv0,.tag,.badge,.hlab,.cb-i em{font-size:12px}
+.cb-i em{line-height:20px}
+/* Dialog menerima fokus saat dibuka (agar Tab/Escape bekerja di dalamnya); wadahnya bukan kontrol, jadi tanpa cincin fokus */
+.sheet:focus,.sheet:focus-visible{outline:0}
+.card.pc[role="button"]:focus-visible{outline:3px solid var(--mar);outline-offset:2px}

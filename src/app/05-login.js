@@ -3,7 +3,7 @@ function renderLogin(msg) {
   $('#app').innerHTML = '<div class="login"><div class="lg-hero"><img src="icons/icon-192.png" alt="Duado Snack" width="116" height="116"><h1 class="wordmark">DUADO SNACK</h1><p>Jajanan Cemilan Pedas</p></div><div class="lg-card">' +
     '<label>Username<input id="lu" class="inp" autocomplete="username" autocapitalize="none" value="' + esc(LS.get('lastUser', '')) + '"></label>' +
     '<label>PIN<input id="lp" class="inp" type="password" inputmode="numeric" autocomplete="current-password"></label>' +
-    '<button class="btn pri big" data-act="login">Masuk</button><div class="err" id="lerr">' + esc(msg || '') + '</div>' +
+    '<button class="btn pri big" data-act="login">Masuk</button><div class="err" id="lerr" role="alert">' + esc(msg || '') + '</div>' +
     (S.queue.length ? '<div class="muted">' + S.queue.length + ' transaksi menunggu dikirim setelah masuk.</div>' : '') + '</div></div>';
 }
 async function doLogin() {

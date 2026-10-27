@@ -11,6 +11,7 @@
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <title>Duado Snack</title>
+<link rel="preload" href="fonts/baloo2-800.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
@@ -18,8 +19,8 @@
 <div id="upd" hidden></div>
 <div id="app"><div class="splash">Duado Snack</div></div>
 <div id="sheet" hidden></div>
-<div id="busy" hidden></div>
-<div id="toast"></div>
+<div id="busy" role="status" aria-live="polite" hidden></div>
+<div id="toast" role="status" aria-live="polite"></div>
 <script src="js/config.js"></script>
 <script src="js/app.js"></script>
 <script src="js/modules.js"></script>

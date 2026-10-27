@@ -26,7 +26,7 @@ function handle(req) {
     case 'bootstrap': data = boot('kasir'); break;
     case 'ping': data = {ver: CAT + '~' + STK, cat_ver: CAT, stock_ver: STK, time: 'x'}; break;
     case 'stock.get': data = {ver: CAT + '~' + STK, cat_ver: CAT, stock_ver: STK, stok: {}}; break;
-    case 'sales.list': data = M.sales; break;
+    case 'sales.list': if (M.srvPage && payload.limit) { const off = payload.offset || 0, done = M.sales.filter(r => r.status === 'selesai'); data = {rows: M.sales.slice(off, off + payload.limit), total: M.sales.length, offset: off, summary: {omzet: done.reduce((a, r) => a + r.total, 0), nTrx: done.length, nDone: done.length}}; } else data = M.sales; break;
     case 'sale.batch': data = payload.sales.map(s => M.batchMode === 'ok' ? {ok: true, data: {sale: {nomor: 'T-' + s.request_id}, stok: {}}} : M.batchMode === 'RETRY' ? {ok: false, error: 'Server sibuk', retry: true} : {ok: false, error: M.batchMode, retry: false}); break;
     default: data = {ok: true};
   }
@@ -156,6 +156,63 @@ const nCards = page => page.$$eval('#grid .card', e => e.length);
     await page.evaluate(() => Promise.all([fetch('js/app.js'), fetch('js/modules.js')])); await page.waitForTimeout(400);
     const body = await page.evaluate(() => fetch('js/modules.js').then(r => r.text())); ok(!/diubah di server/.test(body), 'aset inti tetap versi terpasang walau server berubah (tidak ada campuran versi)');
     ok((hits['/js/app.js'] || 0) === before, 'aset inti tidak menimbulkan permintaan jaringan di belakang layar');
+    await page.context().close(); }
+
+  console.log('\n[Riwayat] paginasi server (v1.9.9): 230 transaksi, 50 per halaman');
+  { reset(); M.srvPage = true; const page = await open(seedBase()); await page.waitForSelector('#grid .card'); await page.click('nav [data-t=riwayat]'); await page.waitForSelector('#rlist .li');
+    const cnt = () => page.$$eval('#rlist .li', e => e.length), nSales = () => M.calls.filter(c => c === 'sales.list').length;
+    ok(await cnt() === 50 && nSales() === 1, 'halaman pertama: 50 baris, 1 permintaan: ' + await cnt());
+    ok(/230/.test(await page.textContent('#rsum')) && /2\.300\.000/.test(await page.textContent('#rsum')), 'KPI dari ringkasan server (230 transaksi, Rp 2.300.000), bukan dari 50 baris');
+    ok(/180/.test(await page.textContent('.lmore')), 'tombol menyebut sisa 180: ' + await page.textContent('.lmore'));
+    await page.click('#rlist .lmore'); await page.waitForFunction(() => document.querySelectorAll('#rlist .li').length >= 100, null, {timeout: 3000}).catch(() => {});
+    ok(await cnt() === 100 && nSales() === 2, 'ketuk: 100 baris dengan tepat 1 permintaan tambahan: ' + await cnt() + '/' + nSales());
+    for (let i = 0; i < 6; i++) { if (await page.$('#rlist .lmore')) { await page.click('#rlist .lmore').catch(() => {}); await page.waitForTimeout(250); } }
+    ok(await cnt() === 230 && !(await page.$('#rlist .lmore')), 'akhirnya 230 baris dan tombol hilang: ' + await cnt());
+    ok((await page.$$eval('#rlist .li b', e => new Set(e.map(x => x.textContent)).size)) >= 229, 'tidak ada baris ganda');
+    await page.context().close(); M.srvPage = false; }
+
+  console.log('\n[Antrean] hapus transaksi lewat sheet alasan (tanpa prompt bawaan browser)');
+  { reset(); const q = [qItem('d1', 'review', 'Harga belum diatur: SK1 di Offline.')].map(x => Object.assign(x, {status: 'review', state: 'error', alerted: true}));
+    const page = await open(seedBase({queue: q})); await page.waitForSelector('#grid .card'); let native = 0; page.on('dialog', d => { native++; d.dismiss(); });
+    await page.click('#badge'); await page.waitForSelector('#sheet [data-act=qdel]'); await page.click('#sheet [data-act=qdel]'); await page.waitForSelector('#rsn');
+    await page.waitForTimeout(150); ok(native === 0, 'tidak memakai prompt() bawaan browser'); ok(await page.evaluate(() => document.activeElement && document.activeElement.id === 'rsn'), 'kolom alasan langsung fokus');
+    await page.click('[data-act=reason_ok]'); ok(/wajib/i.test(await page.textContent('#rerr')) && !M.calls.includes('sale.reject_log'), 'alasan kosong ditolak, server tidak dipanggil');
+    await page.fill('#rsn', 'Pelanggan batal, uang belum diterima'); await page.click('[data-act=reason_ok]'); await page.waitForTimeout(400);
+    ok(M.calls.includes('sale.reject_log'), 'alasan terisi: dicatat ke server (sale.reject_log)');
+    ok(await page.evaluate(() => JSON.parse(localStorage.getItem('queue') || '[]').length === 0 || window.APP.S.queue.length === 0), 'transaksi hilang dari antrean');
+    ok(!!(await page.$('#sheet .qs-top')), 'daftar antrean tampil kembali setelah selesai');
+    await page.click('[data-act=close]'); await page.waitForTimeout(100); await page.context().close(); }
+  { reset(); const q = [qItem('d2', 'review', 'Harga belum diatur: SK1 di Offline.')].map(x => Object.assign(x, {status: 'review', state: 'error', alerted: true}));
+    const page = await open(seedBase({queue: q})); await page.waitForSelector('#grid .card'); await page.click('#badge'); await page.click('#sheet [data-act=qdel]'); await page.waitForSelector('#rsn'); await page.keyboard.press('Escape'); await page.waitForTimeout(150);
+    ok(!M.calls.includes('sale.reject_log') && (await page.evaluate(() => window.APP.S.queue.length)) === 1 && !!(await page.$('#sheet .qs-top')), 'Escape membatalkan: antrean utuh dan daftar antrean kembali');
+    await page.context().close(); }
+
+  console.log('\n[Aksesibilitas] keyboard, dialog, nama dan status (v1.9.11)');
+  { reset(); const page = await open(seedBase()); await page.waitForSelector('#grid .card');
+    ok(await page.getAttribute('nav.nav', 'aria-label') === 'Menu utama', 'navigasi bawah punya nama landmark');
+    ok(await page.$$eval('nav.nav button[aria-current="page"]', e => e.length) === 1 && /Kasir/.test(await page.textContent('nav.nav button[aria-current="page"]')), 'tab aktif bertanda aria-current=page (Kasir)');
+    ok(await page.$$eval('.chip[data-act="cat"][aria-pressed]', e => e.length) > 0 && await page.$eval('.chip[data-act="cat"].on', e => e.getAttribute('aria-pressed')) === 'true', 'chip kategori aktif aria-pressed=true');
+    ok(await page.$eval('#grid .card', e => e.getAttribute('role') === 'button' && e.tabIndex === 0), 'kartu produk (belum di keranjang) = tombol yang bisa difokus');
+    ok(await page.$eval('#grid .card .plus', e => e.getAttribute('aria-hidden')) === 'true', 'tanda + dekoratif tidak lagi role=button bersarang');
+    await page.focus('#grid .card:nth-child(2)'); await page.keyboard.press('Enter'); await page.waitForTimeout(120);
+    ok(await page.$('#cartbar .cartbar') !== null, 'Enter pada kartu fokus memasukkan produk ke keranjang');
+    ok(await page.$eval('#grid .card:nth-child(2)', e => e.getAttribute('role')) === 'group' && await page.evaluate(() => document.activeElement && document.activeElement.getAttribute('data-act')) === 'inc1', 'kartu di keranjang jadi group dan fokus pindah ke tombol Tambah (tidak hilang)');
+    ok(/Tambah Produk/.test(await page.evaluate(() => document.activeElement.getAttribute('aria-label') || '')), 'tombol stepper bernama produknya: ' + await page.evaluate(() => document.activeElement.getAttribute('aria-label')));
+    await page.keyboard.press('Space'); await page.waitForTimeout(120);
+    ok(await page.$eval('#grid .card:nth-child(2) .step b', e => e.textContent) === '2', 'Space pada tombol Tambah menaikkan jumlah ke 2');
+    await page.focus('#cartbar .cartbar'); await page.keyboard.press('Enter'); await page.waitForSelector('#sheet .sheet');
+    ok(await page.$eval('#sheet .sheet', e => e.getAttribute('aria-labelledby') === 'sheet-h' && !!document.getElementById('sheet-h')), 'dialog diberi nama dari judulnya (aria-labelledby)');
+    ok(await page.evaluate(() => document.activeElement === document.querySelector('#sheet .sheet')), 'fokus masuk ke dialog saat dibuka');
+    let inside = true; for (let i = 0; i < 40 && inside; i++) { await page.keyboard.press('Tab'); inside = await page.evaluate(() => !!document.activeElement && !!document.activeElement.closest('#sheet .sheet')); }
+    ok(inside, 'Tab 40 kali tetap berputar di dalam dialog (tidak keluar ke halaman di belakang)');
+    await page.keyboard.press('Escape'); await page.waitForTimeout(120);
+    ok(await page.$('#sheet .sheet') === null, 'Escape menutup dialog');
+    ok(await page.getAttribute('#busy', 'role') === 'status', 'overlay memuat diumumkan sebagai status');
+    ok(await page.$eval('#badge', e => parseFloat(getComputedStyle(e).fontSize) >= 12), 'lencana status sinkron minimal 12px (sebelumnya 11,5px)');
+    await page.context().close(); }
+
+  { reset(); const page = await open(null); await page.waitForSelector('#lerr');
+    ok(await page.getAttribute('#lerr', 'role') === 'alert', 'pesan galat login diumumkan (role=alert)');
     await page.context().close(); }
 
   console.log('\n[Umum] galat JavaScript di halaman'); ok(errs.length === 0, errs.length ? 'ada galat: ' + errs.slice(0, 3).join(' | ') : 'tidak ada galat JS');

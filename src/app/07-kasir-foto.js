@@ -13,11 +13,12 @@ function vKasir() {
   const d = S.data, wide = isWide(); S.cart = S.cart.filter(l => vById(l.v));
   const withAny = new Set(d.variants.map(v => v.product_id)), withV = new Set(d.variants.filter(v => !isAddon(v)).map(v => v.product_id)), cats = ['Semua'].concat(Array.from(new Set(d.products.filter(p => withV.has(p.id)).map(p => String(p.kategori == null ? '' : p.kategori)).filter(Boolean)))), noV = d.products.filter(p => !withAny.has(p.id)).length;
   if (S.cat !== 'Semua' && cats.indexOf(S.cat) < 0) S.cat = 'Semua';
-  const top = '<div class="kasir-top">' + (own() && noV ? '<div class="notice"><span>' + noV + ' produk belum punya varian, jadi belum tampil di sini.</span><button class="chip" data-act="go_cek">Periksa data</button></div>' : '') + '<button id="qstat" data-act="queue"></button>' +
-    '<div class="seg">' + d.channels.map(c => '<button class="' + (c.id === S.ch ? 'on' : '') + '" data-act="chan" data-c="' + esc(c.id) + '">' + esc(chShort(c.nama)) + '</button>').join('') + '</div>' +
-    '<label class="search">' + svg('search', 18) + '<input id="q" class="inp" data-in="q" placeholder="Cari produk atau SKU" value="' + esc(S.q) + '" aria-label="Cari produk"></label>' +
-    wrapChips(cats.map(c => '<button class="chip ' + (c === S.cat ? 'on' : '') + '" data-act="cat" data-c="' + esc(c) + '">' + esc(c) + '</button>').join('')) +
-    '<div class="krow"><span class="muted" id="kcount"></span><label class="sw sm"><input type="checkbox" data-act="hideout"' + (S.hideOut ? ' checked' : '') + '><span class="sw-t" aria-hidden="true"></span><span class="sw-l">Sembunyikan yang habis</span></label></div></div>';
+  const ctl = (own() && noV ? '<div class="notice"><span>' + noV + ' produk belum punya varian, jadi belum tampil di sini.</span><button class="chip" data-act="go_cek">Periksa data</button></div>' : '') + '<button id="qstat" data-act="queue"></button>' +
+    '<div class="seg">' + d.channels.map(c => '<button class="' + (c.id === S.ch ? 'on' : '') + '" aria-pressed="' + (c.id === S.ch) + '" data-act="chan" data-c="' + esc(c.id) + '">' + esc(chShort(c.nama)) + '</button>').join('') + '</div>',
+    flt = '<label class="search">' + svg('search', 18) + '<input id="q" class="inp" data-in="q" placeholder="Cari produk atau SKU" value="' + esc(S.q) + '" aria-label="Cari produk"></label>' +
+    wrapChips(cats.map(c => '<button class="chip ' + (c === S.cat ? 'on' : '') + '" aria-pressed="' + (c === S.cat) + '" data-act="cat" data-c="' + esc(c) + '">' + esc(c) + '</button>').join('')) +
+    '<div class="krow"><span class="muted" id="kcount"></span><label class="sw sm"><input type="checkbox" data-act="hideout"' + (S.hideOut ? ' checked' : '') + '><span class="sw-t" aria-hidden="true"></span><span class="sw-l">Sembunyikan yang habis</span></label></div>',
+    top = wide ? '<div class="kasir-top">' + ctl + flt + '</div>' : '<div class="kasir-ctl">' + ctl + '</div><div class="kasir-top">' + flt + '</div>'; // v1.9.9 ponsel: pemilih channel ikut tergulir; hanya cari + kategori yang menempel (hemat ~1/4 layar)
   const m = $('#main'); m.className = wide ? 'split' : '';
   m.innerHTML = wide ? '<div class="kleft">' + top + '<div class="grid" id="grid"></div></div><aside class="kright" id="cpanel">' + cartInner(true) + '</aside>' : top + '<div class="grid" id="grid"></div>';
   grid(); if (wide) mountCart(); qstatUpd();
@@ -90,13 +91,16 @@ async function fotoWarm() { // simpan semua foto katalog ke cache offline (satu 
     for (const k of await c.keys()) if (!keep.has(k.url)) await c.delete(k);
   } catch (e) { logErr(e, 'foto'); } finally { fotoBusy = false; }
 }
+/* Kartu yang belum di keranjang = satu tombol "tambah". Kartu yang sudah di keranjang memuat tombol - dan + sungguhan; di dalam role=button anak-anaknya dianggap dekoratif (tak terbaca pembaca layar), jadi kartu itu menjadi group. */
+const cardAttrs = v => cartQty(v.id) ? {role: 'group', 'aria-label': vName(v)} : {role: 'button', tabindex: '0', 'aria-disabled': isOff(v) ? 'true' : 'false'};
+const cardRole = v => { const a = cardAttrs(v); return Object.keys(a).map(k => ' ' + k + '="' + esc(a[k]) + '"').join(''); };
 function cardHtml(v) {
   const pr = priceOf(v.id, S.ch), st = Number(v.stok) || 0, q = cartQty(v.id), off = isOff(v), lv = lvText(v.level_pedas), t = tileOf(v);
   const stk = st <= 0 ? '' : st <= 5 ? '<span class="stk low">Sisa ' + num(st) + '</span>' : '<span class="stk">Stok ' + num(st) + '</span>';
   const bad = pr == null ? '<span class="badge-out warn">Harga?</span>' : st <= 0 ? '<span class="badge-out">HABIS</span>' : '';
   return '<div class="ph" style="--t1:' + t[0] + ';--t2:' + t[1] + '">' + photoHtml(v) + bad + heat(v.level_pedas) + '</div><div class="bd"><b class="pn">' + esc(vName(v)) + (lv ? ' <span class="lvt">· ' + esc(lv) + '</span>' : '') + '</b>' + (v.ukuran ? '<div class="pm"><span class="sz">' + esc(v.ukuran) + '</span></div>' : '') +
     '<div class="pf"><div class="pp"><span class="pr">' + (pr == null ? 'Harga belum diatur' : rp(pr)) + '</span>' + stk + '</div>' +
-    (q ? '<div class="step"><button data-act="dec1" data-v="' + esc(v.id) + '" aria-label="Kurangi">−</button><b>' + q + '</b><button data-act="inc1" data-v="' + esc(v.id) + '" aria-label="Tambah">+</button></div>' : '<span class="plus' + (off ? ' dis' : '') + '" role="button" aria-disabled="' + (off ? 'true' : 'false') + '" aria-label="Tambah ' + esc(vName(v)) + '">+</span>') + '</div></div>';
+    (q ? '<div class="step"><button data-act="dec1" data-v="' + esc(v.id) + '" aria-label="Kurangi ' + esc(vName(v)) + '">−</button><b>' + q + '</b><button data-act="inc1" data-v="' + esc(v.id) + '" aria-label="Tambah ' + esc(vName(v)) + '">+</button></div>' : '<span class="plus' + (off ? ' dis' : '') + '" aria-hidden="true">+</span>') + '</div></div>';
 }
 function grid() {
   const d = S.data, q = S.q.toLowerCase(), avail = v => (Number(v.stok) || 0) > 0;
@@ -107,14 +111,18 @@ function grid() {
   const kc = $('#kcount'); if (kc) kc.textContent = list.length + ' produk' + (S.hideOut && base.length > list.length ? ' · ' + (base.length - list.length) + ' habis disembunyikan' : '');
   $('#grid').innerHTML = (list.slice(0, lim('grid')).map(v => {
     const off = isOff(v), n = heatN(v.level_pedas);
-    return '<div class="card pc h' + (n < 0 ? 'x' : n) + (off ? ' off' : '') + (cartQty(v.id) ? ' in' : '') + '" data-act="add" data-v="' + esc(v.id) + '" role="button" tabindex="0" aria-disabled="' + (off ? 'true' : 'false') + '">' + cardHtml(v) + '</div>';
+    return '<div class="card pc h' + (n < 0 ? 'x' : n) + (off ? ' off' : '') + (cartQty(v.id) ? ' in' : '') + '" data-act="add" data-v="' + esc(v.id) + '"' + cardRole(v) + '>' + cardHtml(v) + '</div>';
   }).join('') + moreBtn('grid', list.length)) || (S.hideOut && base.length ? emptyState('stok', 'Semua produk habis', 'Matikan "Sembunyikan yang habis" untuk melihat daftar lengkap.', '<button class="btn sec" data-act="showout">Tampilkan yang habis</button>') :
     own() ? emptyState('stok', 'Belum ada produk untuk dijual', 'Produk harus punya varian dan harga agar tampil di sini.', '<button class="btn pri" data-act="go_cek">Periksa data</button>') : emptyState('stok', 'Belum ada produk', 'Tidak ada produk di kategori ini.', ''));
   watchMore();
 }
 function updCard(id) { // perbarui satu kartu saja, tanpa menggambar ulang seluruh daftar
   const el = document.querySelector('#grid .card[data-v="' + id + '"]'), v = vById(id); if (!el || !v) return;
-  el.innerHTML = cardHtml(v); el.classList.toggle('in', cartQty(id) > 0); el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+  const had = el.contains(document.activeElement); // pengguna keyboard: fokus jangan hilang saat isi kartu diganti
+  el.innerHTML = cardHtml(v); el.classList.toggle('in', cartQty(id) > 0);
+  ['role', 'tabindex', 'aria-disabled', 'aria-label'].forEach(a => el.removeAttribute(a));
+  const at = cardAttrs(v); Object.keys(at).forEach(k => el.setAttribute(k, at[k]));
+  if (had) { const nx = /** @type {HTMLElement|null} */ (cartQty(id) > 0 ? el.querySelector('[data-act="inc1"]') : el); if (nx) nx.focus({preventScroll: true}); } el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
 }
 function barRender() {
   const el = $('#cartbar'); if (!el) return;
@@ -139,7 +147,7 @@ function dropFromCart(id) {
   S.cart[i].qty--; if (S.cart[i].qty <= 0) S.cart.splice(i, 1); saveCart(); updCard(id); syncCart();
 }
 const payMethods = () => ['tunai', 'transfer', 'qris'].filter(m => { const v = cfg('bayar_' + m); return v === undefined || v === '' || T(v); }); // whitelist dari Pengaturan
-const methodChips = () => payMethods().map(m => '<button class="chip ' + (S.metode === m ? 'on' : '') + '" data-act="metode" data-m="' + m + '">' + m.toUpperCase() + '</button>').join('');
+const methodChips = () => payMethods().map(m => '<button class="chip ' + (S.metode === m ? 'on' : '') + '" aria-pressed="' + (S.metode === m) + '" data-act="metode" data-m="' + m + '">' + m.toUpperCase() + '</button>').join('');
 function cartLines() {
   const el = $('#cl'); if (!el) return;
   if (!S.cart.length) { delete LIM.cart; el.innerHTML = '<div class="cp-empty">' + svg('kasir', 34) + '<p>Ketuk produk di sebelah kiri untuk menambahkannya ke pesanan.</p></div>'; return; }

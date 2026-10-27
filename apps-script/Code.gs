@@ -478,14 +478,15 @@ function doPost(e) {
   return out_(api(req));
 }
 function api(req) {
+  const T0 = Date.now(); // v1.9.9: waktu proses server dikirim balik (ms) agar kecepatan backend bisa diukur dari Diagnostik
   try {
     VERS_ = null; BUMP_ = null; // aman bila instans dipakai ulang antar permintaan
     schemaCheck_();
     const s = req.action === 'login' ? null : auth_(req.token), v0 = vers_(), data = route_(Object.assign({}, req, {payload: normNums_(req.payload || {})}), s), v1 = vers_();
     // ver_prev = versi tepat sebelum perubahan pertama permintaan ini (dibaca di dalam kunci). Bila perangkat lain menyela di antara perubahan, tidak dikirim, agar klien tidak mengira ia sudah mutakhir.
     const pv = BUMP_ ? (BUMP_.clean ? BUMP_.prev : {}) : v0;
-    return {ok: true, data: data, ver: v1.cat_ver + '~' + v1.stock_ver, ver_prev: pv.cat_ver ? pv.cat_ver + '~' + pv.stock_ver : undefined, cat_ver: v1.cat_ver, cat_prev: pv.cat_ver, stock_ver: v1.stock_ver, stock_prev: pv.stock_ver};
-  } catch (e) { return {ok: false, error: String((e && e.message) || e), retry: isTransient_(e)}; }
+    return {ok: true, data: data, ver: v1.cat_ver + '~' + v1.stock_ver, ver_prev: pv.cat_ver ? pv.cat_ver + '~' + pv.stock_ver : undefined, cat_ver: v1.cat_ver, cat_prev: pv.cat_ver, stock_ver: v1.stock_ver, stock_prev: pv.stock_ver, ms: Date.now() - T0};
+  } catch (e) { return {ok: false, error: String((e && e.message) || e), retry: isTransient_(e), ms: Date.now() - T0}; }
 }
 function route_(r, s) {
   const p = r.payload || {};
@@ -703,7 +704,11 @@ function nextSeq_(day) {
 }
 function salesList_(p, s) {
   const day = p.tanggal || Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
-  return rowsByDate_('sales', 'tanggal', day, day).filter(o => s.role === 'owner' || o.kasir_id === s.uid).reverse();
+  const all = rowsByDate_('sales', 'tanggal', day, day).filter(o => s.role === 'owner' || o.kasir_id === s.uid).reverse();
+  const lim = Math.min(Math.floor(Number(p.limit)) || 0, 500);
+  if (!(lim > 0)) return all; // klien lama: semua baris sehari dalam satu larik
+  const off = Math.max(Math.floor(Number(p.offset)) || 0, 0), done = all.filter(o => o.status === 'selesai'); // v1.9.9: paginasi server; ringkasan dihitung atas SEMUA transaksi hari itu
+  return {rows: all.slice(off, off + lim), total: all.length, offset: off, summary: {omzet: done.reduce((a, o) => a + Number(o.total), 0), nTrx: done.filter(o => !o.ref_sale_id).length, nDone: done.length}};
 }
 
 /* ===== Inventory: pembelian (HPP rata-rata tertimbang) dan penyesuaian stok ===== */
