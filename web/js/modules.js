@@ -44,13 +44,13 @@ function barChart(ser) {
   const W = 320, H = 130, pad = 18, n = ser.length, max = Math.max(1, ...ser.map(s => s.omzet)), bw = (W - 8) / n; let g = '';
   ser.forEach((s, i) => {
     const h = Math.max(1, Math.round(s.omzet / max * (H - pad - 14))), lh = Math.max(0, Math.round(Math.max(s.laba, 0) / max * (H - pad - 14))), x = 4 + i * bw + bw * .15, w = bw * .7;
-    g += '<rect data-b="' + i + '" x="' + x + '" y="' + (H - pad - h) + '" width="' + w + '" height="' + h + '" rx="3" fill="#F28C1B"/><rect data-b="' + i + '" x="' + x + '" y="' + (H - pad - lh) + '" width="' + w + '" height="' + lh + '" rx="3" fill="#4A1414"/>';
-    if (n <= 8 || i % 5 === 0) g += '<text x="' + (x + w / 2) + '" y="' + (H - 4) + '" font-size="10" text-anchor="middle" fill="#6B5252">' + s.d.slice(8) + '</text>';
+    g += '<rect data-b="' + i + '" x="' + x + '" y="' + (H - pad - h) + '" width="' + w + '" height="' + h + '" rx="3" fill="#E4570E"/><rect data-b="' + i + '" x="' + x + '" y="' + (H - pad - lh) + '" width="' + w + '" height="' + lh + '" rx="3" fill="#5B1A14"/>';
+    if (n <= 8 || i % 5 === 0) g += '<text x="' + (x + w / 2) + '" y="' + (H - 4) + '" font-size="10" text-anchor="middle" fill="#6A5851">' + s.d.slice(8) + '</text>';
     g += '<rect data-act="bar" data-i="' + i + '" x="' + (4 + i * bw) + '" y="0" width="' + bw + '" height="' + H + '" fill="transparent" style="cursor:pointer"/>'; // area ketuk selebar kolom
   });
   return '<svg class="bchart" viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="Omzet dan laba kotor per hari. Ketuk batang untuk melihat nilai.">' + g + '</svg>';
 }
-const COL = ['#4A1414', '#F28C1B', '#FFD21F', '#2E7D32', '#8a6d6d'];
+const COL = ['#5B1A14', '#E4570E', '#FFC52E', '#14703A', '#8C7B6E']; // palet token "Dapur Pedas": maroon, cabai, kuning, hijau, abu hangat
 function donut(parts, total) { // batang bertumpuk per channel
   return '<div class="stack" role="img" aria-label="Komposisi penjualan per channel">' + parts.map((p, i) => '<i style="width:' + (total ? p.omzet / total * 100 : 0) + '%;background:' + COL[i % 5] + '"></i>').join('') + '</div>';
 }

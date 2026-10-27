@@ -1,6 +1,6 @@
 {
   "name": "duado-pos",
-  "version": "1.9.11",
+  "version": "2.0.0",
   "private": true,
   "description": "Duado Snack POS: klien web (tanpa framework) + Google Apps Script",
   "scripts": {
